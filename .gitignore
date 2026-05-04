@@ -1,0 +1,17 @@
+﻿node_modules
+dist
+.env
+.env.*
+!.env.example
+uploads
+*.log
+.DS_Store
+Thumbs.db
+/apps/server/generated
+/apps/desktop/dist
+/apps/server/dist
+/apps/server/uploads/*
+!/apps/server/uploads/.gitkeep
+/tools/jdk17/
+/tools/jdk21/
+/apps/wails-desktop/frontend/android/app/chat-88d18-firebase-adminsdk-fbsvc-e0215d8137.json

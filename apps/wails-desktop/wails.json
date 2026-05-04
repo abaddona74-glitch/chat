@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "Chat Desktop",
+  "outputfilename": "ChatDesktop",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Max",
+    "email": "abaddona74@gmail.com"
+  },
+  "info": {
+    "companyName": "Chat",
+    "productName": "Chat Desktop",
+    "productVersion": "1.9.89",
+    "copyright": "Copyright 2026",
+    "comments": "Chat Desktop Application"
+  }
+}

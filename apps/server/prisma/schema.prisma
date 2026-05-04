@@ -1,0 +1,162 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MessageType {
+  TEXT
+  FILE
+  LOCATION
+  VOICE
+}
+
+enum GroupRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+model User {
+  id                  String    @id @default(cuid())
+  email               String    @unique
+  displayName         String
+  username            String?   @unique
+  avatarUrl           String?
+  passwordHash        String
+  isEmailVerified     Boolean   @default(false)
+  emailVerifyCode     String?
+  emailVerifyExpiresAt DateTime?
+  resetCode           String?
+  resetExpiresAt      DateTime?
+  twoFASecret         String?
+  twoFATempSecret     String?
+  isTwoFAEnabled      Boolean   @default(false)
+  statusText          String?
+  statusEmoji         String?
+  lastSeenAt          DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  sentMessages        Message[] @relation("SentMessages")
+  receivedMessages    Message[] @relation("ReceivedMessages")
+  createdGroups       Group[]          @relation("GroupCreator")
+  groupMemberships    GroupMember[]
+  groupMessages       GroupMessage[]   @relation("GroupMessageSender")
+  groupMessageSeens   GroupMessageSeen[]
+  deviceTokens        UserDeviceToken[]
+  themeProfiles       ThemeProfile[]
+}
+
+model ThemeProfile {
+  id              String   @id @default(cuid())
+  name            String
+  accentColor     String
+  layoutColor     String
+  textColor       String
+  backgroundColor String
+  inputColor      String
+  isPublic        Boolean  @default(true)
+  authorId        String
+  author          User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([isPublic, createdAt])
+  @@index([authorId, createdAt])
+}
+
+model UserDeviceToken {
+  id         String   @id @default(cuid())
+  userId     String
+  token      String   @unique
+  platform   String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  lastSeenAt DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Message {
+  id          String      @id @default(cuid())
+  senderId    String
+  recipientId String
+  type        MessageType @default(TEXT)
+  text        String?
+  fileUrl     String?
+  fileName    String?
+  fileMime    String?
+  fileSize    Int?
+  latitude    Float?
+  longitude   Float?
+  durationSec Int?
+  readAt      DateTime?
+  seenAt      DateTime?
+  createdAt   DateTime    @default(now())
+  sender      User        @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient   User        @relation("ReceivedMessages", fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([senderId, recipientId, createdAt])
+  @@index([recipientId, senderId, createdAt])
+}
+
+model Group {
+  id          String         @id @default(cuid())
+  name        String
+  avatarUrl   String?
+  createdById String
+  createdBy   User           @relation("GroupCreator", fields: [createdById], references: [id])
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  members     GroupMember[]
+  messages    GroupMessage[]
+}
+
+model GroupMember {
+  id       String    @id @default(cuid())
+  groupId  String
+  userId   String
+  role     GroupRole @default(MEMBER)
+  joinedAt DateTime  @default(now())
+  group    Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+}
+
+model GroupMessage {
+  id          String      @id @default(cuid())
+  groupId     String
+  senderId    String
+  type        MessageType @default(TEXT)
+  text        String?
+  fileUrl     String?
+  fileName    String?
+  fileMime    String?
+  fileSize    Int?
+  latitude    Float?
+  longitude   Float?
+  durationSec Int?
+  createdAt   DateTime    @default(now())
+  group       Group       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  sender      User        @relation("GroupMessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  seenBy      GroupMessageSeen[]
+
+  @@index([groupId, createdAt])
+}
+
+model GroupMessageSeen {
+  id        String       @id @default(cuid())
+  messageId String
+  userId    String
+  seenAt    DateTime     @default(now())
+  message   GroupMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([userId, seenAt])
+}

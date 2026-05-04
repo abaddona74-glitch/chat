@@ -1,0 +1,44 @@
+{
+  "name": "chat-desktop-frontend",
+  "private": true,
+  "version": "1.9.89",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "cap:sync": "npx cap sync android",
+    "cap:copy": "npx cap copy android",
+    "android:add": "npx cap add android",
+    "android:build": "npm run build && npx cap sync android",
+    "android:apk": "npm run android:build && cd android && gradlew.bat assembleDebug",
+    "android:build:win": "run_android_build.cmd",
+    "android:apk:win": "run_android_apk.cmd",
+    "android:update:server:win": "update_android.bat"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.3.0",
+    "@capacitor/app": "^8.1.0",
+    "@capacitor/browser": "^8.0.3",
+    "@capacitor/cli": "^8.3.0",
+    "@capacitor/core": "^8.3.0",
+    "@capacitor/geolocation": "^8.1.0",
+    "@capacitor/local-notifications": "^8.0.2",
+    "@capacitor/push-notifications": "^8.0.3",
+    "@shiguredo/rnnoise-wasm": "^2025.1.5",
+    "axios": "^1.7.9",
+    "purify-voice": "^1.0.9",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-hot-toast": "^2.5.2",
+    "simple-rnnoise-wasm": "^1.1.0",
+    "socket.io-client": "^4.8.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0"
+  }
+}

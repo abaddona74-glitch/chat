@@ -1,0 +1,18 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "scp": true,
+        "ssh": true,
+        "proxy_set_header": true,
+        "proxy_cache_bypass": true,
+        "ssl_certificate": true,
+        "ssl_certificate_key": true,
+        "include": true,
+        "ssl_dhparam": true,
+        "\\$host": true,
+        "listen": true,
+        "server_name": true,
+        "wails": true,
+        "Set-Content": true,
+        "fix": true
+    }
+}

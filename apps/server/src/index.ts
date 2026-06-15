@@ -44,40 +44,191 @@ app.set("io", io);
 // ── AUTO-UPDATE ENDPOINTS ──
 const updatesDir = path.resolve(process.cwd(), "updates");
 const androidUpdatesDir = path.join(updatesDir, "android");
+const desktopUpdateHistoryDir = path.join(updatesDir, "history");
 fs.mkdirSync(updatesDir, { recursive: true });
 fs.mkdirSync(androidUpdatesDir, { recursive: true });
+fs.mkdirSync(desktopUpdateHistoryDir, { recursive: true });
+
+type DesktopUpdateMetadata = {
+  version: string;
+  notes: string;
+  releasedAt: string;
+};
+
+type DesktopUpdateHistoryItem = DesktopUpdateMetadata & {
+  isLatest: boolean;
+};
+
+const desktopUpdateVersionPattern = /^\d+(?:\.\d+){1,3}$/;
+
+function normalizeDesktopUpdateVersion(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const normalized = value.trim().replace(/^v/i, "");
+  return desktopUpdateVersionPattern.test(normalized) ? normalized : "";
+}
+
+function parseDesktopUpdateVersionPart(part: string): number {
+  const match = part.match(/\d+/);
+  return match ? Number.parseInt(match[0], 10) || 0 : 0;
+}
+
+function compareDesktopUpdateVersions(left: string, right: string): number {
+  const leftParts = left.split(".");
+  const rightParts = right.split(".");
+  const maxLength = Math.max(leftParts.length, rightParts.length);
+
+  for (let index = 0; index < maxLength; index += 1) {
+    const leftPart = index < leftParts.length ? parseDesktopUpdateVersionPart(leftParts[index]) : 0;
+    const rightPart = index < rightParts.length ? parseDesktopUpdateVersionPart(rightParts[index]) : 0;
+
+    if (leftPart > rightPart) {
+      return 1;
+    }
+    if (leftPart < rightPart) {
+      return -1;
+    }
+  }
+
+  return 0;
+}
+
+function readDesktopUpdateMetadata(versionFile: string): DesktopUpdateMetadata | null {
+  if (!fs.existsSync(versionFile)) {
+    return null;
+  }
+
+  try {
+    const stat = fs.statSync(versionFile);
+    const info = JSON.parse(fs.readFileSync(versionFile, "utf-8")) as { version?: string; notes?: string };
+    const version = normalizeDesktopUpdateVersion(info.version);
+    if (!version) {
+      return null;
+    }
+
+    return {
+      version,
+      notes: typeof info.notes === "string" ? info.notes.trim() : "",
+      releasedAt: stat.mtime.toISOString()
+    };
+  } catch {
+    return null;
+  }
+}
+
+function collectDesktopUpdateHistory(): DesktopUpdateHistoryItem[] {
+  const entries = new Map<string, DesktopUpdateHistoryItem>();
+  const latestMetadata = readDesktopUpdateMetadata(path.join(updatesDir, "version.json"));
+
+  if (latestMetadata) {
+    entries.set(latestMetadata.version, {
+      ...latestMetadata,
+      isLatest: true
+    });
+  }
+
+  if (fs.existsSync(desktopUpdateHistoryDir)) {
+    for (const entry of fs.readdirSync(desktopUpdateHistoryDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+
+      const versionFile = path.join(desktopUpdateHistoryDir, entry.name, "version.json");
+      const metadata = readDesktopUpdateMetadata(versionFile);
+      if (!metadata || entries.has(metadata.version)) {
+        continue;
+      }
+
+      entries.set(metadata.version, {
+        ...metadata,
+        isLatest: false
+      });
+    }
+  }
+
+  return [...entries.values()].sort((left, right) => {
+    const versionCompare = compareDesktopUpdateVersions(right.version, left.version);
+    if (versionCompare !== 0) {
+      return versionCompare;
+    }
+
+    return Date.parse(right.releasedAt) - Date.parse(left.releasedAt);
+  });
+}
+
+function resolveDesktopUpdateBundle(requestedVersion?: string): { filePath: string; downloadName: string } | null {
+  const version = normalizeDesktopUpdateVersion(requestedVersion);
+  const latestMetadata = readDesktopUpdateMetadata(path.join(updatesDir, "version.json"));
+  const latestExePath = path.join(updatesDir, "ChatDesktop.exe");
+
+  if (!version) {
+    if (!latestMetadata || !fs.existsSync(latestExePath)) {
+      return null;
+    }
+
+    return {
+      filePath: latestExePath,
+      downloadName: "ChatDesktop.exe"
+    };
+  }
+
+  if (latestMetadata?.version === version && fs.existsSync(latestExePath)) {
+    return {
+      filePath: latestExePath,
+      downloadName: `ChatDesktop-${version.replace(/[^0-9A-Za-z._-]/g, "_")}.exe`
+    };
+  }
+
+  const historyDir = path.join(desktopUpdateHistoryDir, version);
+  const historyVersionFile = path.join(historyDir, "version.json");
+  const historyExePath = path.join(historyDir, "ChatDesktop.exe");
+
+  if (!fs.existsSync(historyVersionFile) || !fs.existsSync(historyExePath)) {
+    return null;
+  }
+
+  return {
+    filePath: historyExePath,
+    downloadName: `ChatDesktop-${version.replace(/[^0-9A-Za-z._-]/g, "_")}.exe`
+  };
+}
 
 app.get("/update/check", (_req, res) => {
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
   const versionFile = path.join(updatesDir, "version.json");
-  if (!fs.existsSync(versionFile)) {
+  const info = readDesktopUpdateMetadata(versionFile);
+  if (!info) {
     return res.json({ update: false });
   }
-  try {
-    const info = JSON.parse(fs.readFileSync(versionFile, "utf-8")) as { version?: string; notes?: string };
-    const version = typeof info.version === "string" ? info.version.trim() : "";
-    if (!version) {
-      return res.json({ update: false });
-    }
-    return res.json({ update: true, version, notes: info.notes || "" });
-  } catch {
-    return res.json({ update: false });
-  }
+  return res.json({ update: true, version: info.version, notes: info.notes || "" });
 });
 
-app.get("/update/download", (_req, res) => {
+app.get("/update/history", (_req, res) => {
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
-  const exePath = path.join(updatesDir, "ChatDesktop.exe");
-  if (!fs.existsSync(exePath)) {
+
+  return res.json({ versions: collectDesktopUpdateHistory() });
+});
+
+app.get("/update/download", (req, res) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+
+  const requestedVersion = normalizeDesktopUpdateVersion(req.query.version);
+  const bundle = resolveDesktopUpdateBundle(requestedVersion || undefined);
+  if (!bundle) {
     return res.status(404).json({ error: "Update file not found" });
   }
+
   res.setHeader("Content-Type", "application/octet-stream");
-  res.setHeader("Content-Disposition", "attachment; filename=ChatDesktop.exe");
-  res.sendFile(exePath);
+  res.setHeader("Content-Disposition", `attachment; filename=${bundle.downloadName}`);
+  res.sendFile(bundle.filePath);
 });
 
 app.get("/update/android/check", (_req, res) => {

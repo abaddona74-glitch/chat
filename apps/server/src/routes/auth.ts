@@ -348,7 +348,7 @@ setInterval(() => {
 }, 60_000);
 
 router.get("/google/desktop", (req, res) => {
-  if (!env.GOOGLE_CLIENT_ID) {
+  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
     return res.status(501).json({ message: "Google not configured." });
   }
   const state = crypto.randomUUID();
@@ -396,9 +396,13 @@ router.get("/google/callback", async (req, res) => {
       }),
     });
 
-    const tokenData = await tokenResponse.json() as { id_token?: string };
+    const tokenData = await tokenResponse.json() as { id_token?: string; error?: string; error_description?: string };
     if (!tokenData.id_token) {
-      return res.status(400).send("<h2>\u274c Token olishda xatolik.</h2>");
+      console.error("[Google Auth] Token exchange failed:", JSON.stringify(tokenData));
+      const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const errorMsg = escapeHtml(tokenData.error_description || tokenData.error || "Token olishda xatolik");
+      const errorHint = tokenData.error ? `<p style="color:#94a3b8;font-size:14px;margin-top:12px;">Error code: ${escapeHtml(tokenData.error)}</p>` : "";
+      return res.status(400).send(`<h2>\u274c ${errorMsg}</h2>${errorHint}<p style="color:#64748b;font-size:13px;">Iltimos, keyinroq qayta urinib ko'ring yoki admin bilan bog'laning.</p>`);
     }
 
     const client = new OAuth2Client(env.GOOGLE_CLIENT_ID);

@@ -14,8 +14,12 @@ export function CheckForUpdate() {
   return window['go']['main']['App']['CheckForUpdate']();
 }
 
-export function DownloadAndUpdate() {
-  return window['go']['main']['App']['DownloadAndUpdate']();
+export function ConsumePendingNotificationTarget() {
+  return window['go']['main']['App']['ConsumePendingNotificationTarget']();
+}
+
+export function DownloadAndUpdate(arg1, arg2) {
+  return window['go']['main']['App']['DownloadAndUpdate'](arg1, arg2);
 }
 
 export function FetchPublicIp() {
@@ -24,6 +28,10 @@ export function FetchPublicIp() {
 
 export function FileExistsInDownloads(arg1) {
   return window['go']['main']['App']['FileExistsInDownloads'](arg1);
+}
+
+export function FocusMainWindow() {
+  return window['go']['main']['App']['FocusMainWindow']();
 }
 
 export function GetAppVersion() {
@@ -66,6 +74,10 @@ export function GetToastPosition() {
   return window['go']['main']['App']['GetToastPosition']();
 }
 
+export function GetUpdateHistory() {
+  return window['go']['main']['App']['GetUpdateHistory']();
+}
+
 export function HideCallNotif() {
   return window['go']['main']['App']['HideCallNotif']();
 }
@@ -80,6 +92,10 @@ export function MinimizeToTray() {
 
 export function Notify(arg1, arg2) {
   return window['go']['main']['App']['Notify'](arg1, arg2);
+}
+
+export function OpenDevTools() {
+  return window['go']['main']['App']['OpenDevTools']();
 }
 
 export function PlayNotificationSound() {
@@ -106,12 +122,24 @@ export function SetCloseToTray(arg1) {
   return window['go']['main']['App']['SetCloseToTray'](arg1);
 }
 
-export function SetStartupEnabled(arg1) {
-  return window['go']['main']['App']['SetStartupEnabled'](arg1);
+export function SetPendingNotificationTarget(arg1) {
+  return window['go']['main']['App']['SetPendingNotificationTarget'](arg1);
+}
+
+export function SetStartupEnabled(arg1, arg2) {
+  return window['go']['main']['App']['SetStartupEnabled'](arg1, arg2);
+}
+
+export function SetStartupLaunchMinimized(arg1) {
+  return window['go']['main']['App']['SetStartupLaunchMinimized'](arg1);
 }
 
 export function SetToastPosition(arg1) {
   return window['go']['main']['App']['SetToastPosition'](arg1);
+}
+
+export function SetWindowCaptionTheme(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SetWindowCaptionTheme'](arg1, arg2, arg3);
 }
 
 export function ShowCallNotif(arg1) {
@@ -120,6 +148,10 @@ export function ShowCallNotif(arg1) {
 
 export function ShowCustomToast(arg1, arg2) {
   return window['go']['main']['App']['ShowCustomToast'](arg1, arg2);
+}
+
+export function ShowCustomToastWithTarget(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ShowCustomToastWithTarget'](arg1, arg2, arg3);
 }
 
 export function ShowInExplorer(arg1) {

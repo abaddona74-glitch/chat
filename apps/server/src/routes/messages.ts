@@ -180,13 +180,16 @@ export function createMessagesRouter(io: Server) {
 
     const { messageIds } = parsed.data;
 
-    // Only delete messages that belong to the user (as sender)
+    // Only delete messages that belong to the user (as sender or recipient)
     const messagesToDelete = await prisma.message.findMany({
       where: {
         id: { in: messageIds },
-        senderId: me.id
+        OR: [
+          { senderId: me.id },
+          { recipientId: me.id }
+        ]
       },
-      select: { id: true, recipientId: true }
+      select: { id: true, recipientId: true, senderId: true }
     });
 
     if (messagesToDelete.length === 0) {
@@ -199,12 +202,76 @@ export function createMessagesRouter(io: Server) {
       where: { id: { in: deletedIds } }
     });
 
-    // Notify both parties
-    const recipientIds = [...new Set(messagesToDelete.map((m) => m.recipientId))];
-    io.to(`user:${me.id}`).emit("messages:deleted", { messageIds: deletedIds });
-    for (const rid of recipientIds) {
-      io.to(`user:${rid}`).emit("messages:deleted", { messageIds: deletedIds });
+    // Notify all involved parties
+    const userIds = new Set<string>([me.id]);
+    for (const m of messagesToDelete) {
+      userIds.add(m.senderId);
+      userIds.add(m.recipientId);
     }
+    
+    for (const uid of userIds) {
+      io.to(`user:${uid}`).emit("messages:deleted", { messageIds: deletedIds });
+    }
+
+    return res.json({ deletedIds });
+  });
+
+  // ── Delete single message ──
+  router.delete("/:id", async (req, res) => {
+    const me = req.user!;
+    const { id } = req.params;
+
+    const message = await prisma.message.findFirst({
+      where: {
+        id,
+        OR: [
+          { senderId: me.id },
+          { recipientId: me.id }
+        ]
+      }
+    });
+
+    if (!message) {
+      return res.status(404).json({ message: "O'chiriladigan xabar topilmadi." });
+    }
+
+    await prisma.message.delete({ where: { id } });
+
+    const userIds = new Set([message.senderId, message.recipientId]);
+    for (const uid of userIds) {
+      io.to(`user:${uid}`).emit("messages:deleted", { messageIds: [id] });
+    }
+
+    return res.json({ deletedIds: [id] });
+  });
+
+  // ── Clear chat history ──
+  router.delete("/clear/:otherUserId", async (req, res) => {
+    const me = req.user!;
+    const { otherUserId } = req.params;
+
+    const messagesToDelete = await prisma.message.findMany({
+      where: {
+        OR: [
+          { senderId: me.id, recipientId: otherUserId },
+          { senderId: otherUserId, recipientId: me.id }
+        ]
+      },
+      select: { id: true }
+    });
+
+    if (messagesToDelete.length === 0) {
+      return res.json({ deletedIds: [] });
+    }
+
+    const deletedIds = messagesToDelete.map(m => m.id);
+
+    await prisma.message.deleteMany({
+      where: { id: { in: deletedIds } }
+    });
+
+    io.to(`user:${me.id}`).emit("messages:deleted", { messageIds: deletedIds });
+    io.to(`user:${otherUserId}`).emit("messages:deleted", { messageIds: deletedIds });
 
     return res.json({ deletedIds });
   });

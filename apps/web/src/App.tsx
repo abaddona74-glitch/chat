@@ -2698,8 +2698,27 @@ function disconnectSocket(socketRef: { current: Socket | null }) {
 }
 
 function formatLastSeen(lastSeenAt?: string | null) {
-  if (!lastSeenAt) return "offline";
-  return `${new Date(lastSeenAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  if (!lastSeenAt) {
+    return "offline";
+  }
+
+  const seenAt = new Date(lastSeenAt);
+  if (Number.isNaN(seenAt.getTime())) {
+    return "offline";
+  }
+
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const seenStart = new Date(seenAt.getFullYear(), seenAt.getMonth(), seenAt.getDate());
+  const dayDiff = Math.round((todayStart.getTime() - seenStart.getTime()) / 86400000);
+  const time = seenAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+  if (dayDiff < 0) {
+    return time;
+  }
+
+  const relativeDay = new Intl.RelativeTimeFormat("en", { numeric: "auto" }).format(-dayDiff, "day");
+  return `${relativeDay} ${time}`;
 }
 
 function buildMessagePreview(message: Message) {

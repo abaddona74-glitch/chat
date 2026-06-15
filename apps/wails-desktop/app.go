@@ -45,6 +45,7 @@ var (
 type App struct {
 	ctx         context.Context
 	closeToTray bool
+	launchMinimizedOnStartup bool
 	appName     string
 	exePath     string
 	isToastMode bool
@@ -54,13 +55,30 @@ type App struct {
 	toastTarget string
 }
 
+func hasStartupMinimizedArg() bool {
+	for _, arg := range os.Args[1:] {
+		if arg == "--startup-minimized" {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) startupCommand() string {
+	if a.launchMinimizedOnStartup {
+		return fmt.Sprintf(`"%s" --startup-minimized`, a.exePath)
+	}
+	return fmt.Sprintf(`"%s"`, a.exePath)
+}
+
 // NewApp creates a new App application struct
 func NewApp() *App {
 	exe, _ := os.Executable()
 	return &App{
-		closeToTray: true,
-		appName:     "ChatDesktop",
-		exePath:     exe,
+		closeToTray:              true,
+		launchMinimizedOnStartup: hasStartupMinimizedArg(),
+		appName:                  "ChatDesktop",
+		exePath:                  exe,
 	}
 }
 
@@ -83,6 +101,9 @@ func (a *App) startup(ctx context.Context) {
 	// Start system tray in background
 	go systray.Run(a.setupTray, nil)
 	go a.applyWindowCaptionTheme()
+	if a.launchMinimizedOnStartup {
+		runtime.WindowHide(ctx)
+	}
 }
 
 func parseHexToColorRef(hex string, fallback uint32) uint32 {
@@ -197,8 +218,11 @@ func (a *App) GetStartupEnabled() bool {
 	return err == nil
 }
 
-// SetStartupEnabled enables or disables auto-start on Windows login
-func (a *App) SetStartupEnabled(enabled bool) bool {
+// SetStartupEnabled enables or disables auto-start on Windows login.
+// When launchMinimized is true, the startup entry includes a flag so the app
+// can start hidden in the tray without flashing a window.
+func (a *App) SetStartupEnabled(enabled bool, launchMinimized bool) bool {
+	a.launchMinimizedOnStartup = launchMinimized
 	k, err := registry.OpenKey(registry.CURRENT_USER,
 		`Software\Microsoft\Windows\CurrentVersion\Run`, registry.SET_VALUE)
 	if err != nil {
@@ -207,7 +231,7 @@ func (a *App) SetStartupEnabled(enabled bool) bool {
 	defer k.Close()
 
 	if enabled {
-		err = k.SetStringValue(a.appName, fmt.Sprintf(`"%s"`, a.exePath))
+		err = k.SetStringValue(a.appName, a.startupCommand())
 	} else {
 		err = k.DeleteValue(a.appName)
 	}
@@ -216,6 +240,15 @@ func (a *App) SetStartupEnabled(enabled bool) bool {
 		return a.GetStartupEnabled()
 	}
 	return enabled
+}
+
+// SetStartupLaunchMinimized controls whether auto-start launches the app hidden.
+func (a *App) SetStartupLaunchMinimized(enabled bool) bool {
+	a.launchMinimizedOnStartup = enabled
+	if !a.GetStartupEnabled() {
+		return enabled
+	}
+	return a.SetStartupEnabled(true, enabled)
 }
 
 // Notify sends a notification event to the frontend

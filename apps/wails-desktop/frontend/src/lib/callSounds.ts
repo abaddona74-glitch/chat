@@ -8,7 +8,11 @@ import { API_URL } from "./api";
 
 const RINGTONE_SOURCE_KEY = "ringtone_source_url";
 const RINGTONE_LABEL_KEY = "ringtone_source_label";
+const DIAL_TONE_SOURCE_KEY = "dialtone_source_url";
+const DIAL_TONE_LABEL_KEY = "dialtone_source_label";
+
 export const DEFAULT_RINGTONE_URL = `${API_URL}/uploads/ringtones/ringtone.mp3`;
+const DEFAULT_DIAL_TONE_LABEL = "Default dial tone";
 
 let audioCtx: AudioContext | null = null;
 let ringtoneInterval: ReturnType<typeof setInterval> | null = null;
@@ -25,6 +29,19 @@ function getAudioContext(): AudioContext {
     audioCtx.resume();
   }
   return audioCtx;
+}
+
+function resolveMediaUrl(sourceUrl: string) {
+  const trimmed = sourceUrl.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  try {
+    return new URL(trimmed, API_URL).toString();
+  } catch {
+    return trimmed;
+  }
 }
 
 function playToneOnce(freq1: number, freq2: number, duration: number, volume = 0.15) {
@@ -50,7 +67,6 @@ function playToneOnce(freq1: number, freq2: number, duration: number, volume = 0
   osc1.stop(now + duration);
   osc2.stop(now + duration);
 
-  // Fade out to avoid click
   gain.gain.setValueAtTime(volume, now + duration - 0.05);
   gain.gain.linearRampToValueAtTime(0, now + duration);
 }
@@ -62,9 +78,21 @@ function stopClassicRingtone() {
   }
 }
 
+function stopLoopingAudio() {
+  if (ringtoneAudio) {
+    try {
+      ringtoneAudio.pause();
+      ringtoneAudio.currentTime = 0;
+    } catch {
+      // ignore stop failures
+    }
+    ringtoneAudio = null;
+  }
+}
+
 function getStoredRingtoneUrl() {
   try {
-    return localStorage.getItem(RINGTONE_SOURCE_KEY)?.trim() || DEFAULT_RINGTONE_URL;
+    return resolveMediaUrl(localStorage.getItem(RINGTONE_SOURCE_KEY) ?? "") || DEFAULT_RINGTONE_URL;
   } catch {
     return DEFAULT_RINGTONE_URL;
   }
@@ -74,7 +102,6 @@ function playClassicRingtone() {
   stopRingtone();
 
   const playRing = () => {
-    // Classic ring: alternating 440Hz and 480Hz
     playToneOnce(440, 480, 0.4, 0.2);
     setTimeout(() => playToneOnce(440, 480, 0.4, 0.2), 500);
   };
@@ -83,16 +110,9 @@ function playClassicRingtone() {
   ringtoneInterval = setInterval(playRing, 3000);
 }
 
-function playAudioRingtone(sourceUrl: string) {
+function playLoopingAudio(sourceUrl: string, fallback: () => void) {
   stopClassicRingtone();
-  if (ringtoneAudio) {
-    try {
-      ringtoneAudio.pause();
-    } catch {
-      // ignore pause failures
-    }
-    ringtoneAudio = null;
-  }
+  stopLoopingAudio();
 
   const audio = new Audio(sourceUrl);
   audio.loop = true;
@@ -102,18 +122,73 @@ function playAudioRingtone(sourceUrl: string) {
 
   void audio.play().catch(() => {
     ringtoneAudio = null;
-    playClassicRingtone();
+    fallback();
   });
 }
 
+function playAudioRingtone(sourceUrl: string) {
+  playLoopingAudio(sourceUrl, playClassicRingtone);
+}
+
+function playDialTonePattern() {
+  stopDialTone();
+
+  const playBeep = () => {
+    const ctx = getAudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = "sine";
+    osc.frequency.value = 425;
+    gain.gain.value = 0.12;
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    const now = ctx.currentTime;
+    osc.start(now);
+    osc.stop(now + 1.0);
+
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.12, now + 0.05);
+    gain.gain.setValueAtTime(0.12, now + 0.9);
+    gain.gain.linearRampToValueAtTime(0, now + 1.0);
+
+    activeOscillator = osc;
+    activeGain = gain;
+  };
+
+  playBeep();
+  dialToneInterval = setInterval(playBeep, 4000);
+}
+
 export function setRingtoneSource(sourceUrl: string, label?: string) {
-  const safeUrl = sourceUrl.trim() || DEFAULT_RINGTONE_URL;
+  const safeUrl = resolveMediaUrl(sourceUrl) || DEFAULT_RINGTONE_URL;
   try {
     localStorage.setItem(RINGTONE_SOURCE_KEY, safeUrl);
     if (label?.trim()) {
       localStorage.setItem(RINGTONE_LABEL_KEY, label.trim());
     } else {
       localStorage.removeItem(RINGTONE_LABEL_KEY);
+    }
+  } catch {
+    // ignore storage failures
+  }
+  return safeUrl;
+}
+
+export function setDialToneSource(sourceUrl: string, label?: string) {
+  const safeUrl = resolveMediaUrl(sourceUrl);
+  try {
+    if (safeUrl) {
+      localStorage.setItem(DIAL_TONE_SOURCE_KEY, safeUrl);
+    } else {
+      localStorage.removeItem(DIAL_TONE_SOURCE_KEY);
+    }
+    if (label?.trim()) {
+      localStorage.setItem(DIAL_TONE_LABEL_KEY, label.trim());
+    } else {
+      localStorage.removeItem(DIAL_TONE_LABEL_KEY);
     }
   } catch {
     // ignore storage failures
@@ -130,6 +205,15 @@ export function resetRingtoneSource() {
   }
 }
 
+export function resetDialToneSource() {
+  try {
+    localStorage.removeItem(DIAL_TONE_SOURCE_KEY);
+    localStorage.removeItem(DIAL_TONE_LABEL_KEY);
+  } catch {
+    // ignore storage failures
+  }
+}
+
 export function getRingtoneSourceInfo() {
   const url = getStoredRingtoneUrl();
   let label = DEFAULT_RINGTONE_URL;
@@ -141,63 +225,42 @@ export function getRingtoneSourceInfo() {
   return { url, label, isDefault: url === DEFAULT_RINGTONE_URL };
 }
 
-/**
- * Play ringtone from stored source URL.
- * Falls back to the built-in ring pattern when audio file playback fails.
- */
-export function startRingtone() {
+export function getDialToneSourceInfo() {
+  let url = "";
+  let label = DEFAULT_DIAL_TONE_LABEL;
+  try {
+    url = resolveMediaUrl(localStorage.getItem(DIAL_TONE_SOURCE_KEY) ?? "");
+    label = localStorage.getItem(DIAL_TONE_LABEL_KEY)?.trim() || DEFAULT_DIAL_TONE_LABEL;
+  } catch {
+    url = "";
+    label = DEFAULT_DIAL_TONE_LABEL;
+  }
+  return { url, label, isDefault: !url };
+}
+
+export function startRingtone(sourceUrl?: string) {
   stopRingtone();
-  playAudioRingtone(getStoredRingtoneUrl());
+  playAudioRingtone(sourceUrl?.trim() ? resolveMediaUrl(sourceUrl) : getStoredRingtoneUrl());
 }
 
 export function stopRingtone() {
-  if (ringtoneAudio) {
-    try {
-      ringtoneAudio.pause();
-      ringtoneAudio.currentTime = 0;
-    } catch {
-      // ignore stop failures
-    }
-    ringtoneAudio = null;
-  }
+  stopLoopingAudio();
   stopClassicRingtone();
 }
 
-/**
- * Play dial tone pattern: tuuut...tuuut (outgoing call waiting)
- * Pattern: 425Hz tone for 1s, pause 3s, repeat
- */
-export function startDialTone() {
+export function startDialTone(sourceUrl?: string) {
   stopDialTone();
 
-  const playBeep = () => {
-    const ctx = getAudioContext();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
+  const customSource = sourceUrl?.trim()
+    ? resolveMediaUrl(sourceUrl)
+    : resolveMediaUrl(localStorage.getItem(DIAL_TONE_SOURCE_KEY) ?? "");
 
-    osc.type = "sine";
-    osc.frequency.value = 425; // Standard European dial tone
-    gain.gain.value = 0.12;
+  if (customSource) {
+    playLoopingAudio(customSource, playDialTonePattern);
+    return;
+  }
 
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-
-    const now = ctx.currentTime;
-    osc.start(now);
-    osc.stop(now + 1.0);
-
-    // Fade in/out
-    gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(0.12, now + 0.05);
-    gain.gain.setValueAtTime(0.12, now + 0.9);
-    gain.gain.linearRampToValueAtTime(0, now + 1.0);
-
-    activeOscillator = osc;
-    activeGain = gain;
-  };
-
-  playBeep();
-  dialToneInterval = setInterval(playBeep, 4000);
+  playDialTonePattern();
 }
 
 export function stopDialTone() {
@@ -205,20 +268,21 @@ export function stopDialTone() {
     clearInterval(dialToneInterval);
     dialToneInterval = null;
   }
+  stopLoopingAudio();
   if (activeOscillator) {
-    try { activeOscillator.stop(); } catch { /* already stopped */ }
+    try {
+      activeOscillator.stop();
+    } catch {
+      // already stopped
+    }
     activeOscillator = null;
   }
   activeGain = null;
 }
 
-/**
- * Play a short "end call" beep sound (descending two-tone)
- */
 export function playEndCallSound() {
   const ctx = getAudioContext();
 
-  // First tone - higher
   const osc1 = ctx.createOscillator();
   const gain1 = ctx.createGain();
   osc1.type = "sine";
@@ -232,7 +296,6 @@ export function playEndCallSound() {
   gain1.gain.setValueAtTime(0.15, now + 0.1);
   gain1.gain.linearRampToValueAtTime(0, now + 0.15);
 
-  // Second tone - lower (descending = call ended)
   const osc2 = ctx.createOscillator();
   const gain2 = ctx.createGain();
   osc2.type = "sine";
@@ -246,14 +309,9 @@ export function playEndCallSound() {
   gain2.gain.linearRampToValueAtTime(0, now + 0.45);
 }
 
-/**
- * Play a deeper "tueueue" sound when sending a message
- * Lower frequency sweep with longer sustain for a richer tone
- */
 export function playMessageSentSound() {
   const ctx = getAudioContext();
 
-  // Main tone - deeper sweep
   const osc1 = ctx.createOscillator();
   const gain1 = ctx.createGain();
   osc1.type = "sine";
@@ -262,7 +320,6 @@ export function playMessageSentSound() {
   gain1.connect(ctx.destination);
 
   const now = ctx.currentTime;
-  // Deeper ascending sweep: 300Hz → 500Hz → 650Hz over 0.35s
   osc1.frequency.setValueAtTime(300, now);
   osc1.frequency.linearRampToValueAtTime(500, now + 0.15);
   osc1.frequency.linearRampToValueAtTime(650, now + 0.35);
@@ -270,12 +327,10 @@ export function playMessageSentSound() {
   osc1.start(now);
   osc1.stop(now + 0.4);
 
-  // Smooth fade out
   gain1.gain.setValueAtTime(0.12, now);
   gain1.gain.setValueAtTime(0.12, now + 0.2);
   gain1.gain.linearRampToValueAtTime(0, now + 0.4);
 
-  // Harmonic overtone for richness
   const osc2 = ctx.createOscillator();
   const gain2 = ctx.createGain();
   osc2.type = "triangle";
@@ -295,7 +350,6 @@ export function playMessageSentSound() {
   gain2.gain.linearRampToValueAtTime(0, now + 0.4);
 }
 
-/** Stop all call sounds */
 export function stopAllCallSounds() {
   stopRingtone();
   stopDialTone();

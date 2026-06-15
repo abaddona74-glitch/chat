@@ -1,7 +1,7 @@
 {
   "name": "chat-desktop-frontend",
   "private": true,
-  "version": "1.9.89",
+  "version": "1.9.90",
   "type": "module",
   "scripts": {
     "dev": "vite",

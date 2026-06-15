@@ -58,7 +58,7 @@ func main() {
 		MinHeight:        700,
 		DisableResize:    false,
 		Frameless:        false,
-		StartHidden:      false,
+		StartHidden:      hasStartupMinimizedArg(),
 		HideWindowOnClose: true,
 		EnableDefaultContextMenu: true,
 		BackgroundColour: &options.RGBA{R: 240, G: 242, B: 245, A: 255},

@@ -2158,6 +2158,137 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--accent);
 }
 
+.update-dialog {
+  width: min(92vw, 560px);
+  max-width: 560px;
+  gap: 18px;
+}
+
+.update-dialog-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.update-dialog-icon {
+  font-size: 40px;
+  line-height: 1;
+}
+
+.update-dialog-header h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.update-dialog-header p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.update-dialog-notes {
+  font-size: 13px;
+}
+
+.update-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.update-dialog-primary-btn,
+.update-dialog-secondary-btn {
+  flex: 0 0 132px;
+  min-height: 58px;
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.update-dialog-secondary-btn {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.update-dialog-secondary-btn:hover:not(:disabled) {
+  background: var(--panel-hover);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.update-dialog-secondary-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.update-progress-panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.update-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.update-progress-head strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.update-progress-track {
+  position: relative;
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--panel-hover);
+  border: 1px solid var(--line);
+}
+
+.update-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent) 0%, #58dfb0 45%, var(--accent-strong) 100%);
+  background-size: 200% 100%;
+  box-shadow: 0 0 14px rgba(31, 174, 132, 0.25);
+  will-change: width, background-position;
+}
+
+.update-progress-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+@keyframes update-flow {
+  from {
+    background-position: 0% 50%;
+  }
+
+  to {
+    background-position: 200% 50%;
+  }
+}
+
 .group-member-select {
   display: flex;
   flex-direction: column;
@@ -3786,6 +3917,16 @@ input:focus, select:focus, textarea:focus {
   .sidebar-resize-handle {
     display: none;
   }
+  .update-dialog-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .update-dialog-primary-btn,
+  .update-dialog-secondary-btn {
+    flex: none;
+    width: 100%;
+  }
 }
 
 /* ═══ SMOOTH CARET ANIMATION (VS Code style) ═══ */
@@ -4669,3 +4810,6 @@ img.clickable:hover {
   opacity: 0.85;
   transform: scale(1.03);
 }
+
+.lightbox-copy { position: absolute; top: 20px; right: 80px; font-size: 24px; color: white; background: none; border: none; cursor: pointer; padding: 10px; z-index: 10001; }
+.lightbox-copy:hover { color: #ccc; }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,7 +20,7 @@ import (
 )
 
 const (
-	AppVersion = "1.9.89"
+	AppVersion = "1.9.95"
 	UpdateURL  = "https://mytelegramchat.ddns.net"
 )
 
@@ -30,6 +31,17 @@ type UpdateInfo struct {
 	Update  bool   `json:"update"`
 	Version string `json:"version"`
 	Notes   string `json:"notes"`
+}
+
+type UpdateHistoryItem struct {
+	Version    string `json:"version"`
+	Notes      string `json:"notes"`
+	ReleasedAt string `json:"releasedAt"`
+	IsLatest   bool   `json:"isLatest"`
+}
+
+type UpdateHistoryResponse struct {
+	Versions []UpdateHistoryItem `json:"versions"`
 }
 
 // CheckForUpdate checks the server for a new version
@@ -73,10 +85,42 @@ func (a *App) CheckForUpdate() map[string]interface{} {
 	}
 }
 
-// DownloadAndUpdate downloads the new exe and prepares for restart
-func (a *App) DownloadAndUpdate() map[string]interface{} {
+// GetUpdateHistory returns all desktop update versions stored on the server.
+func (a *App) GetUpdateHistory() map[string]interface{} {
+	client := &http.Client{Timeout: 10 * time.Second}
+	historyURL := fmt.Sprintf("%s/update/history?ts=%d", UpdateURL, time.Now().UnixMilli())
+	req, err := http.NewRequest(http.MethodGet, historyURL, nil)
+	if err != nil {
+		return map[string]interface{}{"versions": []UpdateHistoryItem{}}
+	}
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return map[string]interface{}{"versions": []UpdateHistoryItem{}}
+	}
+	defer resp.Body.Close()
+
+	var history UpdateHistoryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&history); err != nil {
+		return map[string]interface{}{"versions": []UpdateHistoryItem{}}
+	}
+
+	if history.Versions == nil {
+		history.Versions = []UpdateHistoryItem{}
+	}
+
+	return map[string]interface{}{"versions": history.Versions}
+}
+
+// DownloadAndUpdate downloads the selected exe and prepares for restart.
+func (a *App) DownloadAndUpdate(version string, allowSameVersion bool) map[string]interface{} {
 	client := &http.Client{Timeout: 5 * time.Minute}
 	downloadURL := fmt.Sprintf("%s/update/download?ts=%d", UpdateURL, time.Now().UnixMilli())
+	if selectedVersion := strings.TrimSpace(version); selectedVersion != "" {
+		downloadURL = fmt.Sprintf("%s&version=%s", downloadURL, url.QueryEscape(selectedVersion))
+	}
 	req, err := http.NewRequest(http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": err.Error()}
@@ -134,7 +178,7 @@ func (a *App) DownloadAndUpdate() map[string]interface{} {
 					speedMbps = (float64(deltaBytes) * 8) / elapsedSec / 1_000_000
 				}
 				go wailsRuntime.EventsEmit(a.ctx, "update:progress", map[string]interface{}{
-					"percent":   percent,
+					"percent":   percent, "totalMB": float64(totalSize)/1_048_576,
 					"speedMbps": speedMbps,
 				})
 				lastEmitTime = time.Now()
@@ -157,14 +201,14 @@ func (a *App) DownloadAndUpdate() map[string]interface{} {
 		finalSpeedMbps = (float64(downloaded) * 8) / elapsedSec / 1_000_000
 	}
 	go wailsRuntime.EventsEmit(a.ctx, "update:progress", map[string]interface{}{
-		"percent":   100,
+		"percent":   100, "totalMB": float64(totalSize)/1_048_576,
 		"speedMbps": finalSpeedMbps,
 	})
 	out.Close()
 
 	currentHash, currentErr := fileSHA256(currentExe)
 	tmpHash, tmpErr := fileSHA256(tmpFile)
-	if currentErr == nil && tmpErr == nil && currentHash == tmpHash {
+	if !allowSameVersion && currentErr == nil && tmpErr == nil && currentHash == tmpHash {
 		os.Remove(tmpFile)
 		return map[string]interface{}{
 			"success": false,
@@ -285,3 +329,4 @@ func compareVersions(a, b string) int {
 	}
 	return 0
 }
+

@@ -8,11 +8,15 @@ export function CallNotifRespond(arg1:string):Promise<boolean>;
 
 export function CheckForUpdate():Promise<Record<string, any>>;
 
-export function DownloadAndUpdate():Promise<Record<string, any>>;
+export function ConsumePendingNotificationTarget():Promise<string>;
+
+export function DownloadAndUpdate(arg1:string,arg2:boolean):Promise<Record<string, any>>;
 
 export function FetchPublicIp():Promise<Record<string, any>>;
 
 export function FileExistsInDownloads(arg1:string):Promise<boolean>;
+
+export function FocusMainWindow():Promise<boolean>;
 
 export function GetAppVersion():Promise<string>;
 
@@ -34,6 +38,8 @@ export function GetToastData():Promise<Record<string, any>>;
 
 export function GetToastPosition():Promise<string>;
 
+export function GetUpdateHistory():Promise<Record<string, any>>;
+
 export function HideCallNotif():Promise<boolean>;
 
 export function IsWindowFocused():Promise<boolean>;
@@ -41,6 +47,8 @@ export function IsWindowFocused():Promise<boolean>;
 export function MinimizeToTray():Promise<boolean>;
 
 export function Notify(arg1:string,arg2:string):Promise<boolean>;
+
+export function OpenDevTools():Promise<boolean>;
 
 export function PlayNotificationSound():Promise<boolean>;
 
@@ -54,13 +62,21 @@ export function SaveProxyConfig(arg1:main.ProxyConfig):Promise<boolean>;
 
 export function SetCloseToTray(arg1:boolean):Promise<boolean>;
 
-export function SetStartupEnabled(arg1:boolean):Promise<boolean>;
+export function SetPendingNotificationTarget(arg1:string):Promise<boolean>;
+
+export function SetStartupEnabled(arg1:boolean,arg2:boolean):Promise<boolean>;
+
+export function SetStartupLaunchMinimized(arg1:boolean):Promise<boolean>;
 
 export function SetToastPosition(arg1:string):Promise<boolean>;
+
+export function SetWindowCaptionTheme(arg1:string,arg2:string,arg3:boolean):Promise<boolean>;
 
 export function ShowCallNotif(arg1:string):Promise<boolean>;
 
 export function ShowCustomToast(arg1:string,arg2:string):Promise<boolean>;
+
+export function ShowCustomToastWithTarget(arg1:string,arg2:string,arg3:string):Promise<boolean>;
 
 export function ShowInExplorer(arg1:string):Promise<boolean>;
 

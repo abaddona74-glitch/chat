@@ -100,8 +100,18 @@ export async function GetStartupEnabled(): Promise<boolean> {
   return isWailsRuntime ? WailsApp.GetStartupEnabled() : false;
 }
 
-export async function SetStartupEnabled(enabled: boolean): Promise<boolean> {
-  return isWailsRuntime ? WailsApp.SetStartupEnabled(enabled) : false;
+export async function SetStartupEnabled(enabled: boolean, launchMinimized = false): Promise<boolean> {
+  if (!isWailsRuntime) return false;
+  const dynamicApp = (window as any)?.go?.main?.App;
+  if (typeof dynamicApp?.SetStartupEnabled !== "function") return false;
+  return dynamicApp.SetStartupEnabled(enabled, launchMinimized);
+}
+
+export async function SetStartupLaunchMinimized(enabled: boolean): Promise<boolean> {
+  if (!isWailsRuntime) return false;
+  const dynamicApp = (window as any)?.go?.main?.App;
+  if (typeof dynamicApp?.SetStartupLaunchMinimized !== "function") return false;
+  return dynamicApp.SetStartupLaunchMinimized(enabled);
 }
 
 export async function MinimizeToTray(): Promise<boolean> {
@@ -232,9 +242,17 @@ export async function CheckForUpdate(): Promise<Record<string, any>> {
   }
 }
 
-export async function DownloadAndUpdate(): Promise<{ success?: boolean; error?: string; external?: boolean }> {
+export async function GetUpdateHistory(): Promise<Record<string, any>> {
   if (isWailsRuntime) {
-    return WailsApp.DownloadAndUpdate();
+    return WailsApp.GetUpdateHistory();
+  }
+
+  return { versions: [] };
+}
+
+export async function DownloadAndUpdate(version = "", allowSameVersion = false): Promise<{ success?: boolean; error?: string; external?: boolean }> {
+  if (isWailsRuntime) {
+    return WailsApp.DownloadAndUpdate(version, allowSameVersion);
   }
 
   if (isNativeMobileRuntime) {
@@ -334,7 +352,10 @@ export async function RestoreNormalWindow(): Promise<boolean> {
 }
 
 export async function OpenDevTools(): Promise<boolean> {
-  return isWailsRuntime && (WailsApp as any).OpenDevTools ? (WailsApp as any).OpenDevTools() : false;
+  if (!isWailsRuntime) return false;
+  const dynamicApp = (window as any)?.go?.main?.App;
+  if (typeof dynamicApp?.OpenDevTools !== "function") return false;
+  return dynamicApp.OpenDevTools();
 }
 
 export async function GetProxyConfig(): Promise<ProxyConfig> {

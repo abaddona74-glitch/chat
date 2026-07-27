@@ -15,3 +15,11 @@ Thumbs.db
 /tools/jdk17/
 /tools/jdk21/
 /apps/wails-desktop/frontend/android/app/chat-88d18-firebase-adminsdk-fbsvc-e0215d8137.json
+
+# Debug/test files
+/apps/server/debug_*.mjs
+/apps/server/minimal_test*.mjs
+/apps/server/test_*.mjs
+/apps/server/check-urls.*
+/apps/server/server*.err
+/apps/server/chat-server-deploy.tar.gz

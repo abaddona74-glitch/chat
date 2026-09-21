@@ -21,6 +21,13 @@ var assets embed.FS
 // getDataDir returns a "ChatData" folder next to the running exe.
 // Creates the folder if it does not exist.
 func getDataDir() string {
+	for i, arg := range os.Args {
+		if arg == "--data-dir" && i+1 < len(os.Args) {
+			customDir := os.Args[i+1]
+			_ = os.MkdirAll(customDir, 0755)
+			return customDir
+		}
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return "ChatData"

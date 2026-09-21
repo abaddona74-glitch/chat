@@ -5,8 +5,8 @@ REM Ringtone deploy helper for AWS server.
 REM Server info shu yerda ushlanadi.
 
 set "SCRIPT_DIR=%~dp0"
-set "SERVER=aws"
-set "REMOTE_DIR=/opt/chat/server/uploads/ringtones"
+set "SERVER=maxava"
+set "REMOTE_DIR=/opt/chat/apps/server/uploads/ringtones"
 set "REMOTE_MP3=%REMOTE_DIR%/ringtone.mp3"
 set "REMOTE_VERSION=%REMOTE_DIR%/version.json"
 set "REMOTE_RINGTONE_META=%REMOTE_DIR%/ringtone.json"

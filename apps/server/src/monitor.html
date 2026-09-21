@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Server Monitor</title>
+<style>
+  :root {
+    --bg: #0b0f1a;
+    --bg2: #111827;
+    --card: #151d2e;
+    --border: #22304a;
+    --text: #e5e9f0;
+    --muted: #8b98ad;
+    --accent: #38bdf8;
+    --green: #34d399;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --purple: #a78bfa;
+    --orange: #fb923c;
+    --mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 600px at 80% -10%, #172554 0%, var(--bg) 55%);
+    color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    padding: 24px;
+  }
+  header { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; flex-wrap: wrap; }
+  header h1 { font-size: 22px; font-weight: 700; letter-spacing: .3px; }
+  header h1 span { color: var(--accent); }
+  .live {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 12px; font-weight: 600; color: var(--green);
+    background: rgba(52,211,153,.1); border: 1px solid rgba(52,211,153,.3);
+    padding: 4px 11px; border-radius: 999px;
+  }
+  .live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; transform: scale(1);} 50% { opacity: .35; transform: scale(.8);} }
+  .uptime { font-size: 12px; color: var(--muted); font-family: var(--mono); }
+  .controls { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+  .controls input {
+    background: var(--bg2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 10px; padding: 8px 12px; font-size: 13px; outline: none; width: 220px;
+  }
+  .controls input:focus { border-color: var(--accent); }
+  .stats {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px; margin-bottom: 18px;
+  }
+  .stat {
+    background: linear-gradient(160deg, var(--card), var(--bg2));
+    border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px;
+  }
+  .stat .label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+  .stat .value { font-size: 26px; font-weight: 700; margin-top: 4px; font-family: var(--mono); }
+  .stat .value.green { color: var(--green); }
+  .stat .value.red { color: var(--red); }
+  .stat .value.blue { color: var(--accent); }
+  .stat .value.purple { color: var(--purple); }
+  .stat .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .layout { display: grid; grid-template-columns: 1fr 340px; gap: 16px; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+  .panel { background: var(--bg2); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+  .panel-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 11px 16px; border-bottom: 1px solid var(--border);
+    font-size: 13px; font-weight: 600; color: var(--muted);
+  }
+  .panel-head .count { margin-left: auto; font-family: var(--mono); font-size: 12px; }
+  .filters { display: flex; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .filter {
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 999px; padding: 4px 12px; font-size: 12px; cursor: pointer; transition: all .15s;
+  }
+  .filter:hover { border-color: var(--accent); color: var(--text); }
+  .filter.active { background: var(--accent); border-color: var(--accent); color: #04121f; font-weight: 600; }
+  #feed { height: calc(100vh - 260px); min-height: 420px; overflow-y: auto; padding: 8px 0; }
+  .evt { display: flex; gap: 10px; align-items: baseline; padding: 5px 16px; font-size: 13px; border-left: 3px solid transparent; }
+  .evt:hover { background: rgba(56,189,248,.04); }
+  .evt .time { font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .evt .badge {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+    padding: 2px 7px; border-radius: 6px; white-space: nowrap; flex-shrink: 0;
+  }
+  .evt .body { color: var(--text); word-break: break-word; min-width: 0; }
+  .evt .muted { color: var(--muted); }
+  .evt .hl { font-weight: 600; }
+  .evt.connect { border-left-color: var(--green); }
+  .evt.connect .badge { background: rgba(52,211,153,.15); color: var(--green); }
+  .evt.disconnect { border-left-color: var(--red); }
+  .evt.disconnect .badge { background: rgba(248,113,113,.15); color: var(--red); }
+  .evt.message { border-left-color: var(--accent); }
+  .evt.message .badge { background: rgba(56,189,248,.15); color: var(--accent); }
+  .evt.group_message { border-left-color: var(--purple); }
+  .evt.group_message .badge { background: rgba(167,139,250,.15); color: var(--purple); }
+  .evt.call_offer { border-left-color: var(--yellow); }
+  .evt.call_offer .badge { background: rgba(251,191,36,.15); color: var(--yellow); }
+  .evt.call_answer { border-left-color: var(--yellow); }
+  .evt.call_answer .badge { background: rgba(251,191,36,.15); color: var(--yellow); }
+  .evt.call_end { border-left-color: var(--orange); }
+  .evt.call_end .badge { background: rgba(251,146,60,.15); color: var(--orange); }
+  .evt.ice { border-left-color: #22d3ee; }
+  .evt.ice .badge { background: rgba(34,211,238,.15); color: #22d3ee; }
+  .ice-kind { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 5px; font-family: var(--mono); }
+  .ice-host { background: rgba(52,211,153,.18); color: var(--green); }
+  .ice-srflx { background: rgba(56,189,248,.18); color: var(--accent); }
+  .ice-relay { background: rgba(251,146,60,.18); color: var(--orange); }
+  .ice-unknown { background: rgba(139,152,173,.18); color: var(--muted); }
+  #users { max-height: calc(100vh - 260px); overflow-y: auto; }
+  .user { display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-bottom: 1px solid rgba(34,48,74,.5); }
+  .user .avatar {
+    width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700; color: #04121f;
+  }
+  .user .name { font-size: 13px; font-weight: 600; }
+  .user .meta { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+  .user .since { margin-left: auto; font-size: 11px; color: var(--muted); font-family: var(--mono); }
+  .empty { padding: 30px 16px; text-align: center; color: var(--muted); font-size: 13px; }
+  .chip { font-size: 11px; padding: 1px 7px; border-radius: 6px; background: var(--border); color: var(--text); }
+  .toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 10px 18px; font-size: 13px; display: none; z-index: 10;
+    box-shadow: 0 8px 30px rgba(0,0,0,.5);
+  }
+  .toast.error { border-color: var(--red); color: var(--red); }
+  .toast.ok { border-color: var(--green); color: var(--green); }
+  footer { margin-top: 16px; font-size: 11px; color: var(--muted); font-family: var(--mono); text-align: center; }
+  #logs { max-height: calc(100vh - 260px); overflow-y: auto; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; }
+  .logline { display: flex; gap: 8px; padding: 2px 14px; border-bottom: 1px solid rgba(34,48,74,.25); white-space: pre-wrap; word-break: break-all; }
+  .logline:hover { background: rgba(56,189,248,.04); }
+  .logline .ltime { color: var(--muted); flex-shrink: 0; }
+  .logline .llevel { flex-shrink: 0; font-weight: 700; width: 34px; }
+  .logline .ltext { color: var(--text); }
+  .logline.lv-error .llevel { color: var(--red); }
+  .logline.lv-error .ltext { color: #fca5a5; }
+  .logline.lv-warn .llevel { color: var(--yellow); }
+  .logline.lv-warn .ltext { color: #fde68a; }
+  .logline.lv-info .llevel { color: var(--accent); }
+  .logline.lv-log .llevel { color: var(--muted); }
+  .tabs { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  .tab {
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 8px; padding: 4px 12px; font-size: 12px; cursor: pointer; transition: all .15s;
+  }
+  .tab:hover { border-color: var(--accent); color: var(--text); }
+  .tab.active { background: var(--accent); border-color: var(--accent); color: #04121f; font-weight: 600; }
+</style>
+</head>
+<body>
+<script>
+  // Old web-chat service worker'ni o'chirish (eski cache sahifani ko'rsatmasligi uchun)
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.getRegistrations().then(function (regs) {
+      regs.forEach(function (r) { r.unregister(); });
+    });
+    if (caches && caches.keys) {
+      caches.keys().then(function (keys) {
+        keys.forEach(function (k) { caches.delete(k); });
+      });
+    }
+  }
+</script>
+<header>
+  <h1><span>&#9679;</span> Server Monitor</h1>
+  <div class="live"><span class="dot"></span> LIVE</div>
+  <div class="uptime" id="uptime">uptime: --</div>
+  <div class="controls">
+    <input id="search" type="text" placeholder="Qidirish (ism, userId, event)..." />
+  </div>
+</header>
+
+<div class="stats">
+  <div class="stat"><div class="label">Online</div><div class="value green" id="st-online">0</div><div class="sub" id="st-online-sub">--</div></div>
+  <div class="stat"><div class="label">Bugun: ulangan</div><div class="value blue" id="st-connect">0</div><div class="sub">jami ulanishlar</div></div>
+  <div class="stat"><div class="label">Bugun: uzilgan</div><div class="value red" id="st-disconnect">0</div><div class="sub" id="st-disconnect-sub">--</div></div>
+  <div class="stat"><div class="label">Bugun: xabarlar</div><div class="value" id="st-message">0</div><div class="sub"><span id="st-gmessage">0</span> guruh</div></div>
+  <div class="stat"><div class="label">Bugun: qo'ng'iroqlar</div><div class="value purple" id="st-call">0</div><div class="sub" id="st-call-sub">--</div></div>
+  <div class="stat"><div class="label">Bugun: ICE (P2P/STUN/TURN)</div><div class="value" id="st-ice">0</div><div class="sub" id="st-ice-sub">--</div></div>
+</div>
+
+<div class="layout">
+  <div class="panel">
+    <div class="panel-head">
+      <span>Real-time hodisalar</span>
+      <span class="count" id="evt-count">0</span>
+    </div>
+    <div class="filters" id="filters">
+      <button class="filter active" data-t="all">Barchasi</button>
+      <button class="filter" data-t="connect">Ulanish</button>
+      <button class="filter" data-t="disconnect">Uzilish</button>
+      <button class="filter" data-t="message">Xabar</button>
+      <button class="filter" data-t="group_message">Guruh</button>
+      <button class="filter" data-t="call">Qo'ng'iroq</button>
+      <button class="filter" data-t="ice">ICE</button>
+    </div>
+    <div id="feed"><div class="empty">Yuklanmoqda...</div></div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><span>Online foydalanuvchilar</span><span class="count" id="users-count">0</span></div>
+    <div id="users"><div class="empty">Online yo'q</div></div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><span>Server loglar</span><span class="count" id="logs-count">0</span></div>
+    <div class="tabs" id="logtabs">
+      <button class="tab active" data-lv="all">Barchasi</button>
+      <button class="tab" data-lv="error">Error</button>
+      <button class="tab" data-lv="warn">Warn</button>
+      <button class="tab" data-lv="info">Info</button>
+    </div>
+    <div id="logs"><div class="empty">Loglar yuklanmoqda...</div></div>
+  </div>
+</div>
+
+<footer>chat-server monitor &middot; <span id="evt-total">0</span> hodisa (oxirgi 5000) &middot; SSE: /monitor/stream</footer>
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  var feed = document.getElementById('feed');
+  var usersEl = document.getElementById('users');
+  var allEvents = [];
+  var activeFilter = 'all';
+  var searchTerm = '';
+  var colors = ['#38bdf8', '#a78bfa', '#34d399', '#fbbf24', '#fb923c', '#f472b6', '#22d3ee', '#818cf8'];
+  var colorByUser = {};
+
+  function colorFor(id) {
+    if (!colorByUser[id]) {
+      colorByUser[id] = colors[Object.keys(colorByUser).length % colors.length];
+    }
+    return colorByUser[id];
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function fmtTime(ts) {
+    var d = new Date(ts);
+    return d.toTimeString().slice(0, 8);
+  }
+
+  function fmtAgo(ts) {
+    var s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+    if (s < 60) return s + 's';
+    if (s < 3600) return Math.floor(s / 60) + 'm';
+    return Math.floor(s / 3600) + 'h';
+  }
+
+  function iceLabel(kind) {
+    var map = { host: 'P2P', srflx: 'STUN', relay: 'TURN' };
+    return map[kind] || kind;
+  }
+
+  function renderEvent(ev) {
+    var d = ev.data;
+    var badge = ev.type.toUpperCase();
+    var body = '';
+    var nameHtml = function (uid) {
+      var n = d.userName || d.fromName || uid;
+      return '<span class="hl" style="color:' + colorFor(uid) + '">' + esc(n) + '</span>';
+    };
+
+    if (ev.type === 'connect') {
+      body = nameHtml(d.userId) + ' <span class="muted">ulandi</span> ' +
+        '<span class="chip">' + esc(d.clientType || 'web') + '</span>' +
+        (d.clientVersion ? ' <span class="chip">v' + esc(d.clientVersion) + '</span>' : '') +
+        ' <span class="muted">(' + esc(d.userId).slice(0, 12) + ')</span>';
+    } else if (ev.type === 'disconnect') {
+      body = nameHtml(d.userId) + ' <span class="muted">uzildi</span> ' +
+        '<span class="chip">' + esc(d.reason || '?') + '</span>';
+    } else if (ev.type === 'message') {
+      body = nameHtml(d.fromUserId) + ' <span class="muted">-></span> ' + nameHtml(d.toUserId) +
+        (d.preview ? ' <span class="muted">:</span> "' + esc(d.preview) + '"' : ' <span class="chip">' + esc(d.messageType) + '</span>');
+    } else if (ev.type === 'group_message') {
+      body = nameHtml(d.fromUserId) + ' <span class="muted">-> guruh</span> ' +
+        '<span class="chip">' + esc(d.groupName || d.groupId || '?') + '</span>' +
+        (d.preview ? ' <span class="muted">:</span> "' + esc(d.preview) + '"' : '');
+    } else if (ev.type === 'call_offer') {
+      body = nameHtml(d.fromUserId) + ' <span class="muted">qo&apos;ng&apos;iroq qildi</span> ' + nameHtml(d.toUserId);
+    } else if (ev.type === 'call_answer') {
+      body = nameHtml(d.fromUserId) + ' <span class="muted">qabul qildi</span> ' + nameHtml(d.toUserId);
+    } else if (ev.type === 'call_end') {
+      body = nameHtml(d.fromUserId) + ' <span class="muted">qo&apos;ng&apos;iroqni tugatdi</span> ' + nameHtml(d.toUserId) +
+        ' <span class="chip">' + esc(d.reason || 'ended') + '</span>';
+    } else if (ev.type === 'ice') {
+      body = nameHtml(d.fromUserId) + ' <span class="muted">ice</span> ' + nameHtml(d.toUserId) +
+        ' <span class="ice-kind ice-' + esc(d.iceKind) + '">' + esc(iceLabel(d.iceKind)) + '</span>' +
+        (d.proto ? ' <span class="muted">' + esc(d.proto) + '</span>' : '');
+    } else {
+      body = '<span class="muted">' + esc(JSON.stringify(d)) + '</span>';
+    }
+
+    var el = document.createElement('div');
+    el.className = 'evt ' + ev.type;
+    el.innerHTML = '<span class="time">' + fmtTime(ev.ts) + '</span>' +
+      '<span class="badge">' + badge + '</span><span class="body">' + body + '</span>';
+    return el;
+  }
+
+  function matchesFilter(ev) {
+    if (activeFilter === 'all') return true;
+    if (activeFilter === 'call') return ev.type.indexOf('call') === 0;
+    return ev.type === activeFilter;
+  }
+
+  function matchesSearch(ev) {
+    if (!searchTerm) return true;
+    var hay = JSON.stringify(ev).toLowerCase();
+    return hay.indexOf(searchTerm.toLowerCase()) !== -1;
+  }
+
+  function addEvent(ev) {
+    allEvents.push(ev);
+    if (allEvents.length > 2000) allEvents.splice(0, allEvents.length - 2000);
+    if (matchesFilter(ev) && matchesSearch(ev)) {
+      var el = renderEvent(ev);
+      var nearBottom = feed.scrollTop + feed.clientHeight > feed.scrollHeight - 60;
+      feed.appendChild(el);
+      while (feed.children.length > 500) feed.removeChild(feed.firstChild);
+      if (nearBottom) feed.scrollTop = feed.scrollHeight;
+    }
+    document.getElementById('evt-count').textContent = allEvents.length;
+  }
+
+  function renderAll() {
+    feed.innerHTML = '';
+    var shown = 0;
+    for (var i = allEvents.length - 1; i >= 0; i--) {
+      var ev = allEvents[i];
+      if (matchesFilter(ev) && matchesSearch(ev)) {
+        feed.prepend(renderEvent(ev));
+        shown++;
+        if (shown > 300) break;
+      }
+    }
+    if (shown === 0) {
+      feed.innerHTML = '<div class="empty">Hech qanday hodisa topilmadi</div>';
+    }
+  }
+
+  function updateStats(stats) {
+    var c = stats.today.counts;
+    document.getElementById('st-online').textContent = stats.online.length;
+    document.getElementById('st-online-sub').textContent =
+      stats.online.map(function (u) { return (u.userName || u.userId).split(' ')[0]; }).join(', ').slice(0, 60) || '--';
+    document.getElementById('st-connect').textContent = c.connect || 0;
+    document.getElementById('st-disconnect').textContent = c.disconnect || 0;
+    document.getElementById('st-disconnect-sub').textContent =
+      'oxirgi: ' + fmtAgo(stats.now - 0) + '';
+    document.getElementById('st-message').textContent = c.message || 0;
+    document.getElementById('st-gmessage').textContent = c.group_message || 0;
+    var calls = (c.call_offer || 0) + (c.call_answer || 0);
+    document.getElementById('st-call').textContent = calls;
+    document.getElementById('st-call-sub').textContent = (c.call_end || 0) + ' tugagan';
+    document.getElementById('st-ice').textContent = c.ice || 0;
+    var ik = stats.today.iceKinds;
+    document.getElementById('st-ice-sub').textContent =
+      (ik.host ? 'P2P ' + ik.host + ' ' : '') + (ik.srflx ? 'STUN ' + ik.srflx + ' ' : '') + (ik.relay ? 'TURN ' + ik.relay : '');
+    document.getElementById('evt-total').textContent = stats.totalEvents;
+    var up = stats.uptimeSec;
+    document.getElementById('uptime').textContent = 'uptime: ' + Math.floor(up / 86400) + 'd ' + Math.floor((up % 86400) / 3600) + 'h ' + Math.floor((up % 3600) / 60) + 'm';
+  }
+
+  function renderUsers(online) {
+    if (!online.length) {
+      usersEl.innerHTML = '<div class="empty">Online yo&apos;q</div>';
+      document.getElementById('users-count').textContent = '0';
+      return;
+    }
+    document.getElementById('users-count').textContent = online.length;
+    usersEl.innerHTML = '';
+    online.forEach(function (u) {
+      var name = u.userName || u.userId;
+      var el = document.createElement('div');
+      el.className = 'user';
+      var initials = name.slice(0, 2).toUpperCase();
+      el.innerHTML =
+        '<div class="avatar" style="background:' + colorFor(u.userId) + '">' + esc(initials) + '</div>' +
+        '<div><div class="name">' + esc(name) + '</div>' +
+        '<div class="meta">' + esc(u.clientType) + (u.clientVersion ? ' v' + esc(u.clientVersion) : '') + '</div></div>' +
+        '<div class="since">' + fmtAgo(u.connectedAt) + '</div>';
+      usersEl.appendChild(el);
+    });
+  }
+
+  function showToast(msg, ok) {
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast ' + (ok ? 'ok' : 'error');
+    t.style.display = 'block';
+    setTimeout(function () { t.style.display = 'none'; }, 4000);
+  }
+
+  var allLogs = [];
+  var logFilter = 'all';
+
+  function renderLogLine(line) {
+    var el = document.createElement('div');
+    el.className = 'logline lv-' + line.level;
+    el.innerHTML = '<span class="ltime">' + fmtTime(line.ts) + '</span>' +
+      '<span class="llevel">' + line.level.toUpperCase() + '</span>' +
+      '<span class="ltext">' + esc(line.text) + '</span>';
+    return el;
+  }
+
+  function matchesLogFilter(line) {
+    if (logFilter === 'all') return true;
+    return line.level === logFilter;
+  }
+
+  function addLog(line) {
+    allLogs.push(line);
+    if (allLogs.length > 1500) allLogs.splice(0, allLogs.length - 1500);
+    var logsEl = document.getElementById('logs');
+    if (matchesLogFilter(line)) {
+      var nearBottom = logsEl.scrollTop + logsEl.clientHeight > logsEl.scrollHeight - 60;
+      logsEl.appendChild(renderLogLine(line));
+      while (logsEl.children.length > 400) logsEl.removeChild(logsEl.firstChild);
+      if (nearBottom) logsEl.scrollTop = logsEl.scrollHeight;
+    }
+    document.getElementById('logs-count').textContent = allLogs.length;
+  }
+
+  function renderAllLogs() {
+    var logsEl = document.getElementById('logs');
+    logsEl.innerHTML = '';
+    var shown = 0;
+    for (var i = allLogs.length - 1; i >= 0; i--) {
+      if (matchesLogFilter(allLogs[i])) {
+        logsEl.prepend(renderLogLine(allLogs[i]));
+        shown++;
+        if (shown > 300) break;
+      }
+    }
+    if (shown === 0) {
+      logsEl.innerHTML = '<div class="empty">Loglar yo\'q</div>';
+    }
+  }
+
+  document.getElementById('logtabs').addEventListener('click', function (e) {
+    var btn = e.target.closest('.tab');
+    if (!btn) return;
+    document.querySelectorAll('.tab').forEach(function (b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    logFilter = btn.dataset.lv;
+    renderAllLogs();
+  });
+
+  document.getElementById('filters').addEventListener('click', function (e) {
+    var btn = e.target.closest('.filter');
+    if (!btn) return;
+    document.querySelectorAll('.filter').forEach(function (b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    activeFilter = btn.dataset.t;
+    renderAll();
+  });
+
+  document.getElementById('search').addEventListener('input', function (e) {
+    searchTerm = e.target.value.trim();
+    renderAll();
+  });
+
+  var es = new EventSource('/monitor/stream');
+  es.addEventListener('connect', function (e) { addEvent(JSON.parse(e.data)); });
+  es.addEventListener('disconnect', function (e) { addEvent(JSON.parse(e.data)); });
+  es.addEventListener('message', function (e) { addEvent(JSON.parse(e.data)); });
+  es.addEventListener('group_message', function (e) { addEvent(JSON.parse(e.data)); });
+  es.addEventListener('call_offer', function (e) { addEvent(JSON.parse(e.data)); });
+  es.addEventListener('call_answer', function (e) { addEvent(JSON.parse(e.data)); });
+  es.addEventListener('call_end', function (e) { addEvent(JSON.parse(e.data)); });
+  es.addEventListener('ice', function (e) { addEvent(JSON.parse(e.data)); });
+  es.addEventListener('log', function (e) { addLog(JSON.parse(e.data)); });
+  es.onerror = function () {
+    showToast('SSE uzildi, qayta ulanmoqda...', false);
+  };
+
+  setInterval(function () {
+    fetch('/monitor/api/stats')
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        updateStats(s);
+        renderUsers(s.online);
+      })
+      .catch(function () {});
+  }, 3000);
+
+  fetch('/monitor/api/stats')
+    .then(function (r) { return r.json(); })
+    .then(function (s) {
+      updateStats(s);
+      renderUsers(s.online);
+    })
+    .catch(function () {});
+
+  fetch('/monitor/api/events?limit=300')
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      allEvents = data.events;
+      renderAll();
+    })
+    .catch(function () {});
+
+  fetch('/monitor/api/logs?limit=400')
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      allLogs = data.logs;
+      renderAllLogs();
+    })
+    .catch(function () {});
+})();
+</script>
+</body>
+</html>

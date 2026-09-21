@@ -21,13 +21,19 @@ export type Message = {
   type: MessageType;
   text?: string | null;
   fileUrl?: string | null;
+  thumbUrl?: string | null;
   fileName?: string | null;
   fileMime?: string | null;
   fileSize?: number | null;
   latitude?: number | null;
   longitude?: number | null;
   durationSec?: number | null;
+  replyToId?: string | null;
+  replyTo?: Partial<Message> | null;
+  editedAt?: string | null;
   readAt?: string | null;
+  deletedForSender?: boolean;
+  deletedForRecipient?: boolean;
   createdAt: string;
 };
 
@@ -60,12 +66,16 @@ export type GroupMessage = {
   type: MessageType;
   text?: string | null;
   fileUrl?: string | null;
+  thumbUrl?: string | null;
   fileName?: string | null;
   fileMime?: string | null;
   fileSize?: number | null;
   latitude?: number | null;
   longitude?: number | null;
   durationSec?: number | null;
+  replyToId?: string | null;
+  replyTo?: Partial<GroupMessage> | null;
+  editedAt?: string | null;
   createdAt: string;
   sender?: PublicUser;
 };

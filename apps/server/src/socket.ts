@@ -2,6 +2,7 @@ import { MessageType } from "@prisma/client";
 import { Server } from "socket.io";
 import { z } from "zod";
 import { addUserSocket, isUserOnline, removeUserSocket } from "./lib/presence.js";
+import { pushEventWithNames, trackOnlineUser, untrackOnlineUser } from "./lib/monitor.js";
 import { buildPushPreview, sendPushToUser } from "./lib/push.js";
 import { prisma } from "./lib/prisma.js";
 import { verifyAccessToken } from "./lib/auth.js";
@@ -12,6 +13,8 @@ const sendMessageSchema = z
     type: z.nativeEnum(MessageType).default(MessageType.TEXT),
     text: z.string().trim().min(1).max(4000).optional(),
     fileUrl: z.string().min(1).optional(),
+    thumbUrl: z.string().optional(),
+    replyToId: z.string().optional(),
     fileName: z.string().max(255).optional(),
     fileMime: z.string().max(120).optional(),
     fileSize: z.number().int().positive().max(200 * 1024 * 1024).optional(),
@@ -46,6 +49,8 @@ const groupMessageSchema = z
     type: z.nativeEnum(MessageType).default(MessageType.TEXT),
     text: z.string().trim().min(1).max(4000).optional(),
     fileUrl: z.string().min(1).optional(),
+    thumbUrl: z.string().optional(),
+    replyToId: z.string().optional(),
     fileName: z.string().max(255).optional(),
     fileMime: z.string().max(120).optional(),
     fileSize: z.number().int().positive().max(200 * 1024 * 1024).optional(),
@@ -265,8 +270,13 @@ export function registerSocketHandlers(io: Server) {
 
   io.on("connection", async (socket) => {
     const userId = String(socket.data.userId);
+    const clientType = String(socket.data.clientType || "web");
+    const clientVersion = socket.data.clientVersion ? String(socket.data.clientVersion) : null;
+    console.info("[Socket] connect", { userId, socketId: socket.id, clientType });
     addUserSocket(userId, socket.id);
     socket.join(`user:${userId}`);
+    trackOnlineUser({ userId, socketId: socket.id, clientType, clientVersion, connectedAt: Date.now() });
+    void pushEventWithNames("connect", { userId, clientType, clientVersion });
 
     await prisma.user
       .update({
@@ -341,17 +351,38 @@ export function registerSocketHandlers(io: Server) {
           type: payload.type,
           text: payload.text,
           fileUrl: payload.fileUrl,
+          thumbUrl: payload.thumbUrl,
+          replyToId: payload.replyToId,
           fileName: payload.fileName,
           fileMime: payload.fileMime,
           fileSize: payload.fileSize,
           latitude: payload.latitude,
           longitude: payload.longitude,
           durationSec: payload.durationSec
+        },
+        include: {
+          replyTo: {
+            select: {
+              id: true,
+              senderId: true,
+              text: true,
+              type: true,
+              fileName: true,
+              fileUrl: true,
+              thumbUrl: true
+            }
+          }
         }
       });
 
       io.to(`user:${userId}`).emit("message:new", message);
       io.to(`user:${payload.recipientId}`).emit("message:new", message);
+      void pushEventWithNames("message", {
+        fromUserId: userId,
+        toUserId: payload.recipientId,
+        messageType: payload.type,
+        preview: payload.type === MessageType.TEXT ? String(payload.text ?? "").slice(0, 80) : null
+      });
 
       if (!isUserOnline(payload.recipientId)) {
         const sender = await prisma.user.findUnique({
@@ -369,6 +400,55 @@ export function registerSocketHandlers(io: Server) {
       }
 
       ack?.({ ok: true, message });
+    });
+
+    // ── EDIT MESSAGE REALTIME ──
+    socket.on("message:edit", async (payload: { messageId: string; text: string }, ack?: AckFn) => {
+      if (!payload?.messageId || typeof payload.text !== "string" || !payload.text.trim()) {
+        ack?.({ ok: false, error: "messageId va text kerak." });
+        return;
+      }
+
+      const message = await prisma.message.findUnique({
+        where: { id: payload.messageId }
+      });
+
+      if (!message || message.senderId !== userId) {
+        ack?.({ ok: false, error: "Xabar topilmadi yoki sizga tegishli emas." });
+        return;
+      }
+
+      const hoursSince = (Date.now() - message.createdAt.getTime()) / (1000 * 60 * 60);
+      if (hoursSince > 48) {
+        ack?.({ ok: false, error: "Xabarni faqat 48 soat ichida tahrirlash mumkin." });
+        return;
+      }
+
+      const updated = await prisma.message.update({
+        where: { id: payload.messageId },
+        data: {
+          text: payload.text.trim(),
+          editedAt: new Date()
+        },
+        include: {
+          replyTo: {
+            select: {
+              id: true,
+              senderId: true,
+              text: true,
+              type: true,
+              fileName: true,
+              fileUrl: true,
+              thumbUrl: true
+            }
+          }
+        }
+      });
+
+      io.to(`user:${message.senderId}`).emit("message:edited", updated);
+      io.to(`user:${message.recipientId}`).emit("message:edited", updated);
+
+      ack?.({ ok: true, message: updated });
     });
 
     // ── READ RECEIPTS ──
@@ -436,6 +516,39 @@ export function registerSocketHandlers(io: Server) {
       ack?.({ ok: true });
     });
 
+    // ── MESSAGE REACTIONS ──
+    socket.on("message:react", (payload: { messageId: string; recipientId?: string; emoji: string }) => {
+      if (!payload?.messageId || !payload?.emoji) return;
+      io.to(`user:${userId}`).emit("message:react", {
+        messageId: payload.messageId,
+        userId,
+        emoji: payload.emoji
+      });
+      if (payload.recipientId) {
+        io.to(`user:${payload.recipientId}`).emit("message:react", {
+          messageId: payload.messageId,
+          userId,
+          emoji: payload.emoji
+        });
+      }
+    });
+
+    socket.on("group:message:react", async (payload: { messageId: string; groupId: string; emoji: string }) => {
+      if (!payload?.messageId || !payload?.groupId || !payload?.emoji) return;
+      const members = await prisma.groupMember.findMany({
+        where: { groupId: payload.groupId },
+        select: { userId: true }
+      });
+      for (const m of members) {
+        io.to(`user:${m.userId}`).emit("group:message:react", {
+          groupId: payload.groupId,
+          messageId: payload.messageId,
+          userId,
+          emoji: payload.emoji
+        });
+      }
+    });
+
     socket.on("call:offer", (payload: { recipientId: string; sdp: CallSDP }) => {
       if (!payload?.recipientId || !payload?.sdp) {
         return;
@@ -464,6 +577,7 @@ export function registerSocketHandlers(io: Server) {
         sdpType: (payload.sdp as any)?.type,
         audioMline: audioMline?.trim(),
       });
+      void pushEventWithNames("call_offer", { fromUserId: userId, toUserId: payload.recipientId });
 
       io.to(`user:${payload.recipientId}`).emit("call:offer", {
         fromUserId: userId,
@@ -490,6 +604,7 @@ export function registerSocketHandlers(io: Server) {
         sessionFound: Boolean(existing),
         sdpType: (payload.sdp as any)?.type,
       });
+      void pushEventWithNames("call_answer", { fromUserId: userId, toUserId: payload.recipientId });
 
       io.to(`user:${payload.recipientId}`).emit("call:answer", {
         fromUserId: userId,
@@ -508,11 +623,18 @@ export function registerSocketHandlers(io: Server) {
         // Quick parse: typ host/srflx/relay
         const typMatch = candStr.match(/ typ (\w+)/);
         const protoMatch = candStr.match(/^candidate:\S+ \d+ (\w+)/);
+        const iceKind = typMatch?.[1] ?? "unknown";
         console.info("[Call] call:ice-candidate", {
           fromUserId: userId,
           toUserId: payload.recipientId,
           typ: typMatch?.[1],
           proto: protoMatch?.[1],
+        });
+        void pushEventWithNames("ice", {
+          fromUserId: userId,
+          toUserId: payload.recipientId,
+          iceKind,
+          proto: protoMatch?.[1] ?? null
         });
         io.to(`user:${payload.recipientId}`).emit("call:ice-candidate", {
           fromUserId: userId,
@@ -548,6 +670,7 @@ export function registerSocketHandlers(io: Server) {
         reason,
         hasSession: Boolean(session),
       });
+      void pushEventWithNames("call_end", { fromUserId: userId, toUserId: payload.recipientId, reason });
 
       if (session) {
         await closeDirectCallSession(io, session, userId, reason);
@@ -587,6 +710,8 @@ export function registerSocketHandlers(io: Server) {
           type: payload.type,
           text: payload.text,
           fileUrl: payload.fileUrl,
+          thumbUrl: payload.thumbUrl,
+          replyToId: payload.replyToId,
           fileName: payload.fileName,
           fileMime: payload.fileMime,
           fileSize: payload.fileSize,
@@ -595,6 +720,17 @@ export function registerSocketHandlers(io: Server) {
           durationSec: payload.durationSec
         },
         include: {
+          replyTo: {
+            select: {
+              id: true,
+              senderId: true,
+              text: true,
+              type: true,
+              fileName: true,
+              fileUrl: true,
+              thumbUrl: true
+            }
+          },
           sender: {
             select: { id: true, email: true, displayName: true }
           },
@@ -639,6 +775,13 @@ export function registerSocketHandlers(io: Server) {
           });
         }
       }
+      void pushEventWithNames("group_message", {
+        fromUserId: userId,
+        groupId: payload.groupId,
+        groupName: group?.name ?? null,
+        messageType: payload.type,
+        preview: payload.type === MessageType.TEXT ? String(payload.text ?? "").slice(0, 80) : null
+      });
 
       ack?.({ ok: true, message });
     });
@@ -818,6 +961,7 @@ export function registerSocketHandlers(io: Server) {
     // ── GROUP CALL PARTICIPANT TRACKING ──
     socket.on("group:call:join", async (payload: { groupId: string }) => {
       if (!payload?.groupId) return;
+      socket.join(`group:call:${payload.groupId}`);
       const joined = groupCallMembershipBySocket.get(socket.id) ?? new Set<string>();
       const alreadyJoined = joined.has(payload.groupId);
       joined.add(payload.groupId);
@@ -829,6 +973,7 @@ export function registerSocketHandlers(io: Server) {
       if (!becameVisibleMember) {
         return;
       }
+      const activeUsers = [...(groupCallUsersByGroup.get(payload.groupId) ?? new Set<string>())];
       const members = await prisma.groupMember.findMany({
         where: { groupId: payload.groupId },
         select: { userId: true }
@@ -838,11 +983,16 @@ export function registerSocketHandlers(io: Server) {
           groupId: payload.groupId,
           userId
         });
+        io.to(`user:${m.userId}`).emit("group:call:status", {
+          groupId: payload.groupId,
+          userIds: activeUsers
+        });
       }
     });
 
     socket.on("group:call:leave", async (payload: { groupId: string }) => {
       if (!payload?.groupId) return;
+      socket.leave(`group:call:${payload.groupId}`);
       const joined = groupCallMembershipBySocket.get(socket.id);
       let leftThisGroup = false;
       if (joined) {
@@ -859,6 +1009,7 @@ export function registerSocketHandlers(io: Server) {
       if (!becameFullyAbsent) {
         return;
       }
+      const activeUsers = [...(groupCallUsersByGroup.get(payload.groupId) ?? new Set<string>())];
       const members = await prisma.groupMember.findMany({
         where: { groupId: payload.groupId },
         select: { userId: true }
@@ -868,22 +1019,21 @@ export function registerSocketHandlers(io: Server) {
           groupId: payload.groupId,
           userId
         });
+        io.to(`user:${m.userId}`).emit("group:call:status", {
+          groupId: payload.groupId,
+          userIds: activeUsers
+        });
       }
     });
 
     socket.on("group:call:speaking", async (payload: { groupId: string; speaking: boolean }) => {
       if (!payload?.groupId || typeof payload.speaking !== "boolean") return;
-      const members = await prisma.groupMember.findMany({
-        where: { groupId: payload.groupId, userId: { not: userId } },
-        select: { userId: true }
+      // Fast path: emit to socket room in-memory
+      socket.to(`group:call:${payload.groupId}`).emit("group:call:speaking", {
+        groupId: payload.groupId,
+        userId,
+        speaking: payload.speaking
       });
-      for (const m of members) {
-        io.to(`user:${m.userId}`).emit("group:call:speaking", {
-          groupId: payload.groupId,
-          userId,
-          speaking: payload.speaking
-        });
-      }
     });
 
     socket.on("group:call:end", async (payload: { groupId: string }) => {
@@ -898,11 +1048,18 @@ export function registerSocketHandlers(io: Server) {
           groupId: payload.groupId,
           fromUserId: userId
         });
+        io.to(`user:${m.userId}`).emit("group:call:status", {
+          groupId: payload.groupId,
+          userIds: []
+        });
       }
     });
 
-    socket.on("disconnect", async () => {
+    socket.on("disconnect", async (reason: string) => {
+      console.info("[Socket] disconnect", { userId, socketId: socket.id, reason });
       const activeCount = removeUserSocket(userId, socket.id);
+      untrackOnlineUser(userId, socket.id);
+      void pushEventWithNames("disconnect", { userId, reason });
 
       const joinedGroupIds = [...(groupCallMembershipBySocket.get(socket.id) ?? new Set<string>())];
       groupCallMembershipBySocket.delete(socket.id);
@@ -911,6 +1068,7 @@ export function registerSocketHandlers(io: Server) {
         if (!becameFullyAbsent) {
           continue;
         }
+        const activeUsers = [...(groupCallUsersByGroup.get(groupId) ?? new Set<string>())];
         const members = await prisma.groupMember.findMany({
           where: { groupId },
           select: { userId: true }
@@ -919,6 +1077,10 @@ export function registerSocketHandlers(io: Server) {
           io.to(`user:${m.userId}`).emit("group:call:leave", {
             groupId,
             userId
+          });
+          io.to(`user:${m.userId}`).emit("group:call:status", {
+            groupId,
+            userIds: activeUsers
           });
         }
       }

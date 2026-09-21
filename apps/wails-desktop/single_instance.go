@@ -26,6 +26,12 @@ var singleInstanceMutex uintptr
 // ensureSingleInstance prevents duplicate app instances.
 // If another instance is already running, it brings its window to front and exits.
 func ensureSingleInstance() {
+	for _, arg := range os.Args {
+		if arg == "--multi-instance" {
+			return
+		}
+	}
+
 	mutexName, _ := syscall.UTF16PtrFromString("ChatDesktop_SingleInstance_Mutex")
 	h, _, err := createMutexW.Call(0, 0, uintptr(unsafe.Pointer(mutexName)))
 

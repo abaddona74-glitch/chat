@@ -3,8 +3,8 @@ setlocal EnableExtensions
 
 set ROOT=F:\Project\chat\apps\wails-desktop\frontend
 set APK_PATH=%ROOT%\android\app\build\outputs\apk\debug\app-debug.apk
-set SERVER=aws
-set REMOTE_DIR=/opt/chat/server/updates/android
+set SERVER=maxava
+set REMOTE_DIR=/opt/chat/apps/server/updates/android
 set UPDATE_NOTIFY_URL=https://mytelegramchat.ddns.net/update/android/notify
 set UPDATE_NOTIFY_TOKEN=
 set TEMP_JSON=%TEMP%\chatmobile-version-%RANDOM%%RANDOM%.json

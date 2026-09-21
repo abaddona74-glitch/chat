@@ -163,7 +163,7 @@ async function bootstrap() {
       <ErrorBoundary>
         <App />
       </ErrorBoundary>
-      <Toaster position="bottom-right" />
+      <Toaster position="top-center" toastOptions={{ duration: 3500, style: { background: "#1e293b", color: "#f8fafc", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "0 10px 25px rgba(0,0,0,0.5)" } }} />
     </React.StrictMode>
   );
 }

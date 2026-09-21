@@ -1,4 +1,4 @@
-﻿node_modules
+node_modules
 dist
 .env
 .env.*
@@ -23,3 +23,5 @@ Thumbs.db
 /apps/server/check-urls.*
 /apps/server/server*.err
 /apps/server/chat-server-deploy.tar.gz
+scratch/
+test-results/

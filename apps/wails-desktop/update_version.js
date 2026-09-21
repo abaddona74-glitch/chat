@@ -36,3 +36,15 @@ let updaterCode = fs.readFileSync(updaterPath, 'utf8');
 updaterCode = updaterCode.replace(/AppVersion(?:[ \t]*)=(?:[ \t]*)"[^"]+"/, `AppVersion = "${newVer}"`);
 fs.writeFileSync(updaterPath, updaterCode);
 console.log(`[+] updater.go yangilandi: ${newVer}`);
+
+// 4. Update frontend version files
+if (fs.existsSync('frontend/version.json')) {
+    fs.writeFileSync('frontend/version.json', JSON.stringify({ version: newVer, notes: notes }));
+    console.log(`[+] frontend/version.json yangilandi: ${newVer}`);
+}
+if (fs.existsSync('frontend/package.json')) {
+    const pkg = JSON.parse(fs.readFileSync('frontend/package.json', 'utf8'));
+    pkg.version = newVer;
+    fs.writeFileSync('frontend/package.json', JSON.stringify(pkg, null, 2));
+    console.log(`[+] frontend/package.json yangilandi: ${newVer}`);
+}

@@ -15,6 +15,7 @@
     "build:all": "npm run build -w apps/server && npm run build -w apps/desktop && npm run build -w apps/web"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "concurrently": "^9.2.1"
   }
 }

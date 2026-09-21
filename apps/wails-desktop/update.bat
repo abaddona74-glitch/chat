@@ -4,23 +4,23 @@ setlocal
 set ROOT_DIR=%~dp0
 set EXE_PATH=%ROOT_DIR%build\bin\ChatDesktop.exe
 set FALLBACK_EXE=%ROOT_DIR%wails-desktop.exe
-set SERVER=aws
-set REMOTE_DIR=/opt/chat/server/updates
+set SERVER=maxava
+set REMOTE_DIR=/opt/chat/apps/server/updates
 set REMOTE_HISTORY_DIR=%REMOTE_DIR%/history
 set REMOTE_EXE_PATH=%REMOTE_DIR%/ChatDesktop.exe
 set REMOTE_CURRENT_VER=
 set REMOTE_VERSION_JSON=%TEMP%\chat-remote-version.json
 
-set NEW_VER=%~1
-set NOTES=%~2
+set "NEW_VER=%~1"
+set "NOTES=%~2"
 
 echo ================================
 echo   Chat Desktop - Auto Update
 echo ================================
 echo.
 
-if "%NEW_VER%"=="" set /p NEW_VER=Yangi versiya raqamini kiriting (masalan 1.8.9): 
-if "%NOTES%"=="" set /p NOTES=O'zgarishlar haqida qisqacha (Enter = bo'sh): 
+if not defined NEW_VER set /p NEW_VER=Yangi versiya raqamini kiriting (masalan 1.8.9): 
+if not defined NOTES set /p NOTES=O'zgarishlar haqida qisqacha (Enter = bo'sh): 
 
 echo [+] Versiya fayllari yangilanmoqda: %NEW_VER%
 node update_version.js "%NEW_VER%" "%NOTES%"

@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>3-Party WebRTC Group Voice Call Test</title>
+  <script src="http://localhost:4000/socket.io/socket.io.js"></script>
+  <style>
+    body { font-family: monospace; background: #0f172a; color: #f8fafc; padding: 20px; }
+    .card { background: #1e293b; border-radius: 8px; padding: 16px; margin-bottom: 16px; border: 1px solid #334155; }
+    h1, h2 { color: #38bdf8; }
+    .log-line { margin: 4px 0; font-size: 13px; }
+    .success { color: #4ade80; }
+    .info { color: #60a5fa; }
+    .warn { color: #facc15; }
+    .error { color: #f87171; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #475569; padding: 8px; text-align: left; }
+    th { background: #334155; }
+  </style>
+</head>
+<body>
+  <h1>🎤 3-Party WebRTC Group Voice Call Automated Test</h1>
+  <div id="status" class="card">Initializing...</div>
+  <div id="log-container" class="card">
+    <h2>Realtime Logs</h2>
+    <div id="logs"></div>
+  </div>
+
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const configData = JSON.parse(decodeURIComponent(urlParams.get("data") || "{}"));
+
+    function log(msg, type = "info") {
+      const logs = document.getElementById("logs");
+      const line = document.createElement("div");
+      line.className = "log-line " + type;
+      line.textContent = `[${new Date().toISOString().split("T")[1].slice(0, 8)}] ${msg}`;
+      logs.appendChild(line);
+      console.log(`[${type.toUpperCase()}] ${msg}`);
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+
+    class TestClient {
+      constructor(user, groupId) {
+        this.user = user;
+        this.groupId = groupId;
+        this.socket = null;
+        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        this.destNode = this.audioCtx.createMediaStreamDestination();
+        this.oscillator = null;
+        this.gainNode = this.audioCtx.createGain();
+        this.gainNode.gain.value = 0.0001; // nearly silent baseline
+        this.gainNode.connect(this.destNode);
+
+        // Constant silent oscillator to keep track active
+        const baseOsc = this.audioCtx.createOscillator();
+        baseOsc.type = "sine";
+        baseOsc.frequency.value = 100;
+        baseOsc.connect(this.gainNode);
+        baseOsc.start();
+
+        this.localStream = this.destNode.stream;
+        this.peerConnections = new Map(); // targetUserId -> RTCPeerConnection
+        this.remoteAudioAnalysers = new Map(); // targetUserId -> AnalyserNode
+        this.remoteIceBuffers = new Map();
+        this.remoteDescriptionSet = new Map();
+        this.speakingEvents = [];
+      }
+
+      async connect() {
+        return new Promise((resolve, reject) => {
+          this.socket = io("http://localhost:4000", {
+            auth: { token: this.user.token },
+            transports: ["websocket"]
+          });
+
+          this.socket.on("connect", () => {
+            log(`${this.user.name} (${this.user.id}) Socket connected!`, "success");
+            this.setupSocketHandlers();
+            resolve();
+          });
+
+          this.socket.on("connect_error", (err) => {
+            log(`${this.user.name} connect_error: ${err.message}`, "error");
+            reject(err);
+          });
+        });
+      }
+
+      setupSocketHandlers() {
+        this.socket.on("group:call:join", async (payload) => {
+          if (payload.groupId !== this.groupId || payload.userId === this.user.id) return;
+          log(`[${this.user.name}] received group:call:join for ${payload.userId}`);
+
+          // Deterministic initiator: smaller userId initiates
+          if (this.user.id < payload.userId) {
+            log(`[${this.user.name}] Initiating offer to ${payload.userId} (ID order: ${this.user.id} < ${payload.userId})`);
+            const peer = this.setupPeerConnection(payload.userId);
+            const offer = await peer.createOffer({ offerToReceiveAudio: true });
+            await peer.setLocalDescription(offer);
+            this.socket.emit("group:call:offer", {
+              groupId: this.groupId,
+              toUserId: payload.userId,
+              sdp: offer
+            });
+          }
+        });
+
+        this.socket.on("group:call:offer", async (payload) => {
+          if (payload.groupId !== this.groupId) return;
+          log(`[${this.user.name}] received group:call:offer from ${payload.fromUserId}`);
+          const peer = this.setupPeerConnection(payload.fromUserId);
+          await peer.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+          this.remoteDescriptionSet.set(payload.fromUserId, true);
+
+          const buffered = this.remoteIceBuffers.get(payload.fromUserId) || [];
+          this.remoteIceBuffers.set(payload.fromUserId, []);
+          for (const cand of buffered) {
+            await peer.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+          }
+
+          const answer = await peer.createAnswer();
+          await peer.setLocalDescription(answer);
+          this.socket.emit("group:call:answer", {
+            groupId: this.groupId,
+            toUserId: payload.fromUserId,
+            sdp: answer
+          });
+        });
+
+        this.socket.on("group:call:answer", async (payload) => {
+          if (payload.groupId !== this.groupId) return;
+          log(`[${this.user.name}] received group:call:answer from ${payload.fromUserId}`);
+          const peer = this.peerConnections.get(payload.fromUserId);
+          if (!peer) return;
+          await peer.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+          this.remoteDescriptionSet.set(payload.fromUserId, true);
+
+          const buffered = this.remoteIceBuffers.get(payload.fromUserId) || [];
+          this.remoteIceBuffers.set(payload.fromUserId, []);
+          for (const cand of buffered) {
+            await peer.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+          }
+        });
+
+        this.socket.on("group:call:ice-candidate", async (payload) => {
+          if (payload.groupId !== this.groupId) return;
+          const peer = this.peerConnections.get(payload.fromUserId);
+          if (!peer || !this.remoteDescriptionSet.get(payload.fromUserId)) {
+            const buf = this.remoteIceBuffers.get(payload.fromUserId) || [];
+            buf.push(payload.candidate);
+            this.remoteIceBuffers.set(payload.fromUserId, buf);
+            return;
+          }
+          await peer.addIceCandidate(new RTCIceCandidate(payload.candidate)).catch(() => {});
+        });
+
+        this.socket.on("group:call:speaking", (payload) => {
+          if (payload.groupId !== this.groupId) return;
+          this.speakingEvents.push(payload);
+          log(`[${this.user.name}] saw speaking event: user=${payload.userId}, speaking=${payload.speaking}`, "info");
+        });
+      }
+
+      setupPeerConnection(targetUserId) {
+        if (this.peerConnections.has(targetUserId)) {
+          this.peerConnections.get(targetUserId).close();
+        }
+
+        const peer = new RTCPeerConnection({
+          iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+        });
+
+        this.localStream.getTracks().forEach(track => {
+          peer.addTrack(track, this.localStream);
+        });
+
+        this.remoteDescriptionSet.set(targetUserId, false);
+        if (!this.remoteIceBuffers.has(targetUserId)) {
+          this.remoteIceBuffers.set(targetUserId, []);
+        }
+
+        peer.onicecandidate = (e) => {
+          if (e.candidate) {
+            this.socket.emit("group:call:ice-candidate", {
+              groupId: this.groupId,
+              toUserId: targetUserId,
+              candidate: e.candidate.toJSON()
+            });
+          }
+        };
+
+        peer.ontrack = (e) => {
+          log(`[${this.user.name}] received audio track from ${targetUserId}`, "success");
+          const mediaStream = new MediaStream([e.track]);
+
+          // Create an audio element for Chrome decoding pipeline
+          const audioEl = document.createElement("audio");
+          audioEl.autoplay = true;
+          audioEl.playsInline = true;
+          audioEl.muted = false;
+          audioEl.srcObject = mediaStream;
+          document.body.appendChild(audioEl);
+          audioEl.play().catch(() => {});
+
+          const source = this.audioCtx.createMediaStreamSource(mediaStream);
+          const analyser = this.audioCtx.createAnalyser();
+          analyser.fftSize = 1024;
+          source.connect(analyser);
+
+          // Connect to a low-gain node then to destination so Chrome audio graph processes it
+          const silenceGain = this.audioCtx.createGain();
+          silenceGain.gain.value = 0.01;
+          analyser.connect(silenceGain);
+          silenceGain.connect(this.audioCtx.destination);
+
+          this.remoteAudioAnalysers.set(targetUserId, analyser);
+        };
+
+        peer.onconnectionstatechange = () => {
+          log(`[${this.user.name} ↔ ${targetUserId}] connectionState: ${peer.connectionState}`,
+              peer.connectionState === "connected" ? "success" : "warn");
+        };
+
+        this.peerConnections.set(targetUserId, peer);
+        return peer;
+      }
+
+      joinCall() {
+        if (this.audioCtx.state === "suspended") {
+          this.audioCtx.resume();
+        }
+        this.socket.emit("group:call:join", { groupId: this.groupId });
+        log(`${this.user.name} emitted group:call:join`, "info");
+      }
+
+      startTone(freq = 440) {
+        this.stopTone();
+        if (this.audioCtx.state === "suspended") {
+          this.audioCtx.resume();
+        }
+        this.oscillator = this.audioCtx.createOscillator();
+        this.toneGain = this.audioCtx.createGain();
+        this.oscillator.type = "sine";
+        this.oscillator.frequency.value = freq;
+        this.toneGain.gain.value = 0.9;
+
+        this.oscillator.connect(this.toneGain);
+        this.toneGain.connect(this.destNode);
+        this.oscillator.start();
+        log(`🔊 [${this.user.name}] Started fake voice tone: ${freq} Hz`, "info");
+      }
+
+      stopTone() {
+        if (this.oscillator) {
+          try {
+            this.oscillator.stop();
+            this.oscillator.disconnect();
+          } catch(e) {}
+          this.oscillator = null;
+        }
+      }
+
+      measureIncomingAudio(targetUserId) {
+        const analyser = this.remoteAudioAnalysers.get(targetUserId);
+        if (!analyser) {
+          return { rms: 0, peakFreq: 0, hasSignal: false, hasAnalyser: false };
+        }
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteTimeDomainData(dataArray);
+
+        // Calculate RMS (Volume)
+        let sumSquare = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          const norm = (dataArray[i] - 128) / 128;
+          sumSquare += norm * norm;
+        }
+        const rms = Math.sqrt(sumSquare / dataArray.length);
+
+        // Calculate Frequency Spectrum
+        const freqArray = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteFrequencyData(freqArray);
+
+        let maxVal = -1;
+        let maxIndex = -1;
+        for (let i = 0; i < freqArray.length; i++) {
+          if (freqArray[i] > maxVal) {
+            maxVal = freqArray[i];
+            maxIndex = i;
+          }
+        }
+
+        const nyquist = this.audioCtx.sampleRate / 2;
+        const peakFreq = (maxIndex * nyquist) / analyser.frequencyBinCount;
+
+        return {
+          rms: Number(rms.toFixed(4)),
+          peakFreq: Math.round(peakFreq),
+          maxAmplitude: maxVal,
+          hasSignal: rms > 0.02 && maxVal > 50,
+          hasAnalyser: true
+        };
+      }
+
+      async getStatsWith(targetUserId) {
+        const peer = this.peerConnections.get(targetUserId);
+        if (!peer) return null;
+        const stats = await peer.getStats();
+        let bytesSent = 0;
+        let bytesReceived = 0;
+        let packetsSent = 0;
+        let packetsReceived = 0;
+        let rtt = null;
+
+        stats.forEach(report => {
+          if (report.type === "outbound-rtp" && report.kind === "audio") {
+            bytesSent = report.bytesSent || 0;
+            packetsSent = report.packetsSent || 0;
+          }
+          if (report.type === "inbound-rtp" && report.kind === "audio") {
+            bytesReceived = report.bytesReceived || 0;
+            packetsReceived = report.packetsReceived || 0;
+          }
+          if (report.type === "candidate-pair" && report.state === "succeeded") {
+            rtt = report.currentRoundTripTime;
+          }
+        });
+
+        return {
+          connectionState: peer.connectionState,
+          iceConnectionState: peer.iceConnectionState,
+          bytesSent,
+          bytesReceived,
+          packetsSent,
+          packetsReceived,
+          rtt: rtt ? `${(rtt * 1000).toFixed(1)}ms` : "N/A"
+        };
+      }
+    }
+
+    async function runFullTest() {
+      const results = {
+        connectionMatrix: {},
+        audioTestPhases: [],
+        speakingTest: false,
+        summary: {},
+        passed: false
+      };
+
+      try {
+        log("Step 1: Initializing 3 client instances...", "info");
+        const clientA = new TestClient(configData.userA, configData.groupId);
+        const clientB = new TestClient(configData.userB, configData.groupId);
+        const clientC = new TestClient(configData.userC, configData.groupId);
+
+        await Promise.all([clientA.connect(), clientB.connect(), clientC.connect()]);
+        log("All 3 clients connected to Socket.IO successfully!", "success");
+
+        log("Step 2: All 3 clients joining the group voice call...", "info");
+        clientA.joinCall();
+        await new Promise(r => setTimeout(r, 400));
+        clientB.joinCall();
+        await new Promise(r => setTimeout(r, 400));
+        clientC.joinCall();
+
+        log("Step 3: Waiting for full P2P mesh WebRTC connection (A↔B, A↔C, B↔C)...", "info");
+        const startTime = Date.now();
+        let fullyConnected = false;
+
+        while (Date.now() - startTime < 15000) {
+          const ab = clientA.peerConnections.get(clientB.user.id)?.connectionState === "connected";
+          const ac = clientA.peerConnections.get(clientC.user.id)?.connectionState === "connected";
+          const ba = clientB.peerConnections.get(clientA.user.id)?.connectionState === "connected";
+          const bc = clientB.peerConnections.get(clientC.user.id)?.connectionState === "connected";
+          const ca = clientC.peerConnections.get(clientA.user.id)?.connectionState === "connected";
+          const cb = clientC.peerConnections.get(clientB.user.id)?.connectionState === "connected";
+
+          if (ab && ac && ba && bc && ca && cb) {
+            fullyConnected = true;
+            break;
+          }
+          await new Promise(r => setTimeout(r, 300));
+        }
+
+        if (!fullyConnected) {
+          throw new Error("WebRTC Mesh connection timeout. Not all pairs reached 'connected' state.");
+        }
+        log("🎉 Full 3-party WebRTC Mesh connected successfully!", "success");
+
+        results.connectionMatrix = {
+          "User A ↔ User B": await clientA.getStatsWith(clientB.user.id),
+          "User A ↔ User C": await clientA.getStatsWith(clientC.user.id),
+          "User B ↔ User C": await clientB.getStatsWith(clientC.user.id),
+        };
+
+        // ── Phase 1: User A speaks 440 Hz tone ──
+        log("───────────────────────────────────────────────────────");
+        log("📢 PHASE 1: User A (Alice) transmits 440 Hz audio tone...");
+        clientA.startTone(440);
+        await new Promise(r => setTimeout(r, 2000));
+
+        const p1_b_measure = clientB.measureIncomingAudio(clientA.user.id);
+        const p1_c_measure = clientC.measureIncomingAudio(clientA.user.id);
+        const p1_a_stats = await clientA.getStatsWith(clientB.user.id);
+        const p1_b_stats = await clientB.getStatsWith(clientA.user.id);
+        const p1_c_stats = await clientC.getStatsWith(clientA.user.id);
+
+        clientA.stopTone();
+        await new Promise(r => setTimeout(r, 600));
+
+        log(`User B received from User A: RMS=${p1_b_measure.rms}, PeakFreq=${p1_b_measure.peakFreq}Hz, Signal=${p1_b_measure.hasSignal}`,
+            p1_b_measure.hasSignal ? "success" : "error");
+        log(`User C received from User A: RMS=${p1_c_measure.rms}, PeakFreq=${p1_c_measure.peakFreq}Hz, Signal=${p1_c_measure.hasSignal}`,
+            p1_c_measure.hasSignal ? "success" : "error");
+
+        results.audioTestPhases.push({
+          speaker: "User A (Alice, 440Hz)",
+          listenerB: {
+            user: "User B (Bob)",
+            ...p1_b_measure,
+            bytesReceived: p1_b_stats?.bytesReceived || 0
+          },
+          listenerC: {
+            user: "User C (Charlie)",
+            ...p1_c_measure,
+            bytesReceived: p1_c_stats?.bytesReceived || 0
+          },
+          speakerBytesSent: p1_a_stats?.bytesSent || 0,
+          pass: p1_b_measure.hasSignal && p1_c_measure.hasSignal
+        });
+
+        // ── Phase 2: User B speaks 880 Hz tone ──
+        log("───────────────────────────────────────────────────────");
+        log("📢 PHASE 2: User B (Bob) transmits 880 Hz audio tone...");
+        clientB.startTone(880);
+        await new Promise(r => setTimeout(r, 2000));
+
+        const p2_a_measure = clientA.measureIncomingAudio(clientB.user.id);
+        const p2_c_measure = clientC.measureIncomingAudio(clientB.user.id);
+        const p2_b_stats = await clientB.getStatsWith(clientA.user.id);
+        const p2_a_stats = await clientA.getStatsWith(clientB.user.id);
+        const p2_c_stats = await clientC.getStatsWith(clientB.user.id);
+
+        clientB.stopTone();
+        await new Promise(r => setTimeout(r, 600));
+
+        log(`User A received from User B: RMS=${p2_a_measure.rms}, PeakFreq=${p2_a_measure.peakFreq}Hz, Signal=${p2_a_measure.hasSignal}`,
+            p2_a_measure.hasSignal ? "success" : "error");
+        log(`User C received from User B: RMS=${p2_c_measure.rms}, PeakFreq=${p2_c_measure.peakFreq}Hz, Signal=${p2_c_measure.hasSignal}`,
+            p2_c_measure.hasSignal ? "success" : "error");
+
+        results.audioTestPhases.push({
+          speaker: "User B (Bob, 880Hz)",
+          listenerA: {
+            user: "User A (Alice)",
+            ...p2_a_measure,
+            bytesReceived: p2_a_stats?.bytesReceived || 0
+          },
+          listenerC: {
+            user: "User C (Charlie)",
+            ...p2_c_measure,
+            bytesReceived: p2_c_stats?.bytesReceived || 0
+          },
+          speakerBytesSent: p2_b_stats?.bytesSent || 0,
+          pass: p2_a_measure.hasSignal && p2_c_measure.hasSignal
+        });
+
+        // ── Phase 3: User C speaks 1320 Hz tone ──
+        log("───────────────────────────────────────────────────────");
+        log("📢 PHASE 3: User C (Charlie) transmits 1320 Hz audio tone...");
+        clientC.startTone(1320);
+        await new Promise(r => setTimeout(r, 2000));
+
+        const p3_a_measure = clientA.measureIncomingAudio(clientC.user.id);
+        const p3_b_measure = clientB.measureIncomingAudio(clientC.user.id);
+        const p3_c_stats = await clientC.getStatsWith(clientA.user.id);
+        const p3_a_stats = await clientA.getStatsWith(clientC.user.id);
+        const p3_b_stats = await clientB.getStatsWith(clientC.user.id);
+
+        clientC.stopTone();
+        await new Promise(r => setTimeout(r, 600));
+
+        log(`User A received from User C: RMS=${p3_a_measure.rms}, PeakFreq=${p3_a_measure.peakFreq}Hz, Signal=${p3_a_measure.hasSignal}`,
+            p3_a_measure.hasSignal ? "success" : "error");
+        log(`User B received from User C: RMS=${p3_b_measure.rms}, PeakFreq=${p3_b_measure.peakFreq}Hz, Signal=${p3_b_measure.hasSignal}`,
+            p3_b_measure.hasSignal ? "success" : "error");
+
+        results.audioTestPhases.push({
+          speaker: "User C (Charlie, 1320Hz)",
+          listenerA: {
+            user: "User A (Alice)",
+            ...p3_a_measure,
+            bytesReceived: p3_a_stats?.bytesReceived || 0
+          },
+          listenerB: {
+            user: "User B (Bob)",
+            ...p3_b_measure,
+            bytesReceived: p3_b_stats?.bytesReceived || 0
+          },
+          speakerBytesSent: p3_c_stats?.bytesSent || 0,
+          pass: p3_a_measure.hasSignal && p3_b_measure.hasSignal
+        });
+
+        // ── Phase 4: Speaking status event broadcast ──
+        log("───────────────────────────────────────────────────────");
+        log("📢 PHASE 4: Testing speaking indicator broadcast...");
+        clientA.socket.emit("group:call:speaking", { groupId: configData.groupId, speaking: true });
+        await new Promise(r => setTimeout(r, 500));
+        const sawA = clientB.speakingEvents.some(e => e.userId === clientA.user.id && e.speaking) &&
+                     clientC.speakingEvents.some(e => e.userId === clientA.user.id && e.speaking);
+        results.speakingTest = sawA;
+        log(`Speaking event broadcast to other 2 users: ${sawA ? "PASSED" : "FAILED"}`, sawA ? "success" : "error");
+
+        const allPhasesPassed = results.audioTestPhases.every(p => p.pass);
+        results.passed = fullyConnected && allPhasesPassed && results.speakingTest;
+
+        log("───────────────────────────────────────────────────────");
+        log(`🎉 ALL TESTS COMPLETED. RESULT: ${results.passed ? "ALL PASSED! (100% SUCCESS)" : "SOME CHECKS FAILED"}`,
+            results.passed ? "success" : "error");
+
+        document.getElementById("status").innerHTML = `<h2 class="${results.passed ? 'success' : 'error'}">
+          ${results.passed ? "✅ GROUP CALL TEST PASSED (All 3 Users Connected & Exchanged Audio)" : "❌ TEST FAILED"}
+        </h2>`;
+
+      } catch (err) {
+        log(`FATAL ERROR: ${err.message}`, "error");
+        results.error = err.message;
+        results.passed = false;
+      }
+
+      window.__TEST_RESULTS__ = results;
+
+      // Post back to runner server
+      fetch("/api/test-results", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(results)
+      }).catch(() => {});
+    }
+
+    window.addEventListener("load", runFullTest);
+  </script>
+</body>
+</html>

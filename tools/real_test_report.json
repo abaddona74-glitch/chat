@@ -1,0 +1,25 @@
+{
+  "passed": true,
+  "reports": {
+    "userA": {
+      "role": "userA",
+      "stats": {
+        "bytesRecv": 31983,
+        "rms": 0,
+        "heard": true,
+        "webrtcState": "connected"
+      },
+      "peerName": "Bob Test"
+    },
+    "userB": {
+      "role": "userB",
+      "stats": {
+        "bytesRecv": 22701,
+        "rms": 0,
+        "heard": true,
+        "webrtcState": "connected"
+      },
+      "peerName": "Alice Test"
+    }
+  }
+}

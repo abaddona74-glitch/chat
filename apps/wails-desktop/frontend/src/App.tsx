@@ -65,10 +65,7 @@ import {
   GetDownloadPath,
   GetGeoLocation,
   RestoreNormalWindow,
-  GetProxyConfig,
-  SaveProxyConfig,
   RestartApp,
-  FetchPublicIp,
   GetAppliedProxy,
   EventsOn,
   EventsOff,
@@ -77,8 +74,73 @@ import {
   SetWindowCaptionTheme,
   isWailsRuntime,
   isNativeMobileRuntime,
-  OpenDevTools,
 } from "./platform/bridge";
+import { DeleteConfirmModal } from "./components/DeleteConfirmModal";
+import { UserProfileModal } from "./components/UserProfileModal";
+import { AppLockScreen } from "./components/AppLockScreen";
+import { UpdateModal } from "./components/UpdateModal";
+import { CreateGroupModal } from "./components/modals/CreateGroupModal";
+import { EditGroupModal } from "./components/modals/EditGroupModal";
+import { AddMembersModal } from "./components/modals/AddMembersModal";
+import { MyProfileModal } from "./components/modals/MyProfileModal";
+import { ForwardModal } from "./components/modals/ForwardModal";
+import { AuthScreen } from "./components/auth/AuthScreen";
+import { CallOverlay } from "./components/call/CallOverlay";
+import { SettingsModal } from "./components/settings/SettingsModal";
+import { RightPanel } from "./components/chat/RightPanel";
+import { BurgerMenu } from "./components/navigation/BurgerMenu";
+import {
+  ChatContextMenu,
+  MessageContextMenu,
+} from "./components/chat/ContextMenus";
+import {
+  normalizeFileUrl,
+  getInitialLetter,
+  hasUsableAvatar,
+  escapeForRegex,
+  mentionInsertText,
+  downloadJsonFile,
+  normalizeVolumeLevel,
+  toMediaElementVolume,
+  normalizeHexColor,
+  hexToRgb,
+  shiftHexColor,
+  formatCallDuration,
+  formatCallLogDuration,
+  normalizeLegacyCallLogText,
+  formatLastSeen,
+  readAxiosMessage,
+  getAxiosStatus,
+} from "./utils/formatters";
+import {
+  URL_REGEX,
+  MENTION_REGEX,
+  getSiteName,
+  getYouTubeVideoId,
+  isYouTubeShortsUrl,
+  getInstagramEmbedUrl,
+  requestInlineLinkOpen,
+} from "./utils/linkUtils";
+import {
+  buildMessagePreview,
+  isImageFile,
+  isVideoFile,
+  isMusicFile,
+  extractMusicTitle,
+  parseMarkdownFormatting,
+  renderTextWithLinks,
+  renderMessage,
+} from "./utils/messageUtils";
+import {
+  GlobalMusicController,
+  MusicMessagePlayer,
+  useMusicPlaybackState,
+  sendMusicCommand,
+} from "./components/media/MusicMessagePlayer";
+import { VideoMessagePlayer } from "./components/media/VideoMessagePlayer";
+import { AudioWaveformPlayer } from "./components/media/AudioWaveformPlayer";
+import { LinkPreview } from "./components/media/LinkPreview";
+import { FileMessageBubble } from "./components/media/FileMessageBubble";
 
 const RNNOISE_WORKLET_PUBLIC_URL = "/rnnoise.worklet.js";
 
@@ -235,121 +297,6 @@ function readLocalThemeProfiles(): LocalThemeProfile[] {
   }
 }
 
-function downloadJsonFile(filename: string, payload: unknown) {
-  const blob = new Blob([JSON.stringify(payload, null, 2)], {
-    type: "application/json",
-  });
-  const objectUrl = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = objectUrl;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(objectUrl);
-}
-
-/** Convert file URLs — make relative URLs absolute for desktop, strip old domains */
-function normalizeFileUrl(url: string | null | undefined): string | undefined {
-  if (!url) return undefined;
-  if (url.startsWith("/")) return `${API_URL}${url}`;
-  // Already absolute — check if it has the right host
-  try {
-    const u = new URL(url);
-    return `${API_URL}${u.pathname}`;
-  } catch {
-    return url;
-  }
-}
-
-function escapeForRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function mentionInsertText(user: PublicUser): string {
-  const preferred = user.username?.trim() || user.displayName.trim();
-  return `@${preferred} `;
-}
-
-function getInitialLetter(value: string | null | undefined): string {
-  const s = (value ?? "").trim();
-  return s ? s.charAt(0).toUpperCase() : "?";
-}
-
-function hasUsableAvatar(avatarUrl: string | null | undefined): boolean {
-  const s = (avatarUrl ?? "").trim().toLowerCase();
-  return Boolean(s && s !== "null" && s !== "undefined");
-}
-
-function normalizeVolumeLevel(value: number, fallback = 1): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.min(2, Math.max(0, value));
-}
-
-function toMediaElementVolume(value: number, fallback = 1): number {
-  return Math.min(normalizeVolumeLevel(value, fallback), 1);
-}
-
-function normalizeHexColor(
-  value: string | null | undefined,
-  fallback: string,
-): string {
-  const raw = (value ?? "").trim();
-  const fullHex = /^#([\da-fA-F]{6})$/;
-  const shortHex = /^#([\da-fA-F]{3})$/;
-  if (fullHex.test(raw)) return raw.toLowerCase();
-  const short = raw.match(shortHex);
-  if (short) {
-    const [r, g, b] = short[1].split("");
-    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
-  }
-  return fallback;
-}
-
-function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
-  const normalized = normalizeHexColor(hex, "#000000");
-  const match = normalized.match(
-    /^#([\da-fA-F]{2})([\da-fA-F]{2})([\da-fA-F]{2})$/,
-  );
-  if (!match) return null;
-  return {
-    r: parseInt(match[1], 16),
-    g: parseInt(match[2], 16),
-    b: parseInt(match[3], 16),
-  };
-}
-
-function shiftHexColor(hex: string, offset: number): string {
-  const rgb = hexToRgb(hex);
-  if (!rgb) return hex;
-  const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
-  const toHex = (v: number) => clamp(v).toString(16).padStart(2, "0");
-  return `#${toHex(rgb.r + offset)}${toHex(rgb.g + offset)}${toHex(rgb.b + offset)}`;
-}
-
-const ACCENT_COLOR_PRESETS = [
-  "#0e7c66",
-  "#3b82f6",
-  "#f97316",
-  "#ef4444",
-  "#a855f7",
-  "#22c55e",
-];
-const LAYOUT_COLOR_PRESETS = [
-  "#1e2c3a",
-  "#22313f",
-  "#2a2438",
-  "#1f2937",
-  "#14213d",
-  "#102a43",
-];
-const TEXT_COLOR_PRESETS = [
-  "#e1e8ef",
-  "#f1f5f9",
-  "#fde68a",
-  "#d1fae5",
-  "#e9d5ff",
-  "#fbcfe8",
-];
-
 const copyImageToClipboard = async (url: string) => {
   try {
     const res = await fetch(url);
@@ -378,6 +325,16 @@ const WEBRTC_ICE_SERVERS: RTCIceServer[] = [
     username: "chatturn",
     credential: "9Fzi61Srx5OU9isIoJ8vwJ7N",
   },
+  {
+    urls: "turn:mytelegramchat.ddns.net:3478",
+    username: "chatuser",
+    credential: "ChatTurnPass2026",
+  },
+  {
+    urls: "turn:mytelegramchat.ddns.net:3478?transport=tcp",
+    username: "chatuser",
+    credential: "ChatTurnPass2026",
+  },
 ];
 
 const FORCE_WEBRTC_RELAY = (() => {
@@ -404,7 +361,7 @@ const ICE_PROBE_LS_KEY = "ice_probe_results_v1";
 
 // ── Active-call persistence (auto-resume after restart/update) ──
 const ACTIVE_CALL_LS_KEY = "active_call_state_v1";
-const ACTIVE_CALL_RESUME_WINDOW_MS = 60_000; // resume only if call was active in the last 60s
+const ACTIVE_CALL_RESUME_WINDOW_MS = 180_000; // resume only if call was active in the last 3 minutes
 
 type ActiveCallState = {
   peerId: string; // userId for direct, groupId for group
@@ -651,6 +608,8 @@ function getCallEndToastText(reason?: string) {
       return "Call ended (app closed).";
     case "peer-disconnected":
       return "Call ended (peer disconnected).";
+    case "update_restart":
+      return "Suhbatdosh ilovasini yangilamoqda. Qayta ulanadi...";
     default:
       return "Call ended.";
   }
@@ -719,61 +678,6 @@ function sanitizeUnlockInput(value: string, mode: "numeric" | "text"): string {
   return value.slice(0, PASSCODE_MAX_LENGTH);
 }
 
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result ?? ""));
-    reader.onerror = () => reject(new Error("Could not read image file."));
-    reader.readAsDataURL(file);
-  });
-}
-
-function compressImageDataUrl(
-  dataUrl: string,
-  maxSide = 1600,
-  quality = 0.82,
-): Promise<string> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      try {
-        const w = img.naturalWidth || img.width;
-        const h = img.naturalHeight || img.height;
-        if (!w || !h) {
-          resolve(dataUrl);
-          return;
-        }
-
-        const scale = Math.min(1, maxSide / Math.max(w, h));
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(w * scale));
-        canvas.height = Math.max(1, Math.round(h * scale));
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
-          resolve(dataUrl);
-          return;
-        }
-
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", quality));
-      } catch {
-        resolve(dataUrl);
-      }
-    };
-    img.onerror = () => resolve(dataUrl);
-    img.src = dataUrl;
-  });
-}
-
-function formatCallDuration(sec: number): string {
-  if (!Number.isFinite(sec) || sec < 0) sec = 0;
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = sec % 60;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
-}
-
 function App() {
   const [token, setToken] = useState<string | null>(() => readPersistedToken());
   const [isSessionBootstrapping, setIsSessionBootstrapping] = useState(() =>
@@ -783,26 +687,11 @@ function App() {
     string | null
   >(null);
   const [sessionBootstrapNonce, setSessionBootstrapNonce] = useState(0);
-  const [authStep, setAuthStep] = useState<AuthStep>("login");
   const [currentUser, setCurrentUser] = useState<PublicUser | null>(null);
   const [users, setUsers] = useState<PublicUser[]>([]);
   const [selectedUserId, setSelectedUserId] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
-
-  const [loginEmail, setLoginEmail] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
-  const [registerEmail, setRegisterEmail] = useState("");
-  const [registerPassword, setRegisterPassword] = useState("");
-  const [registerDisplayName, setRegisterDisplayName] = useState("");
-  const [verifyEmail, setVerifyEmail] = useState("");
-  const [verifyCode, setVerifyCode] = useState("");
-  const [forgotEmail, setForgotEmail] = useState("");
-  const [resetCode, setResetCode] = useState("");
-  const [resetPassword, setResetPassword] = useState("");
-  const [tempTwoFAToken, setTempTwoFAToken] = useState("");
-  const [twoFALoginCode, setTwoFALoginCode] = useState("");
-  const [isSubmittingAuth, setIsSubmittingAuth] = useState(false);
 
   const [messageType, setMessageType] = useState<MessageType>("TEXT");
   const [messageText, setMessageText] = useState("");
@@ -819,6 +708,7 @@ function App() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [networkOnline, setNetworkOnline] = useState(() => navigator.onLine);
   const [isSocketConnected, setIsSocketConnected] = useState(false);
+  const hasSocketConnectedOnceRef = useRef(false);
 
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
@@ -835,9 +725,6 @@ function App() {
   const [unlockKeyboardMode, setUnlockKeyboardMode] = useState<
     "numeric" | "text"
   >("numeric");
-  const [showSetPasscode, setShowSetPasscode] = useState(false);
-  const [newPasscode, setNewPasscode] = useState("");
-  const [confirmPasscode, setConfirmPasscode] = useState("");
   const [autoLockEnabled, setAutoLockEnabled] = useState(
     () => localStorage.getItem("auto_lock") === "true",
   );
@@ -849,36 +736,6 @@ function App() {
 
   // ── SETTINGS / NIGHT MODE ──
   const [showSettings, setShowSettings] = useState(false);
-  const [publicIp, setPublicIp] = useState<string>("");
-  const [ipLoading, setIpLoading] = useState(false);
-  const fetchPublicIp = async () => {
-    setIpLoading(true);
-    try {
-      if (isWails) {
-        // Use Go HTTP client which respects proxy config
-        const result: any = await FetchPublicIp();
-        if (result.error) {
-          setPublicIp("Error: " + result.error);
-        } else {
-          setPublicIp(result.ip || "Unknown");
-        }
-      } else {
-        const res = await fetch("https://api.ipify.org?format=json");
-        const data = await res.json();
-        setPublicIp(data.ip || "Unknown");
-      }
-    } catch {
-      setPublicIp("Failed to detect");
-    }
-    setIpLoading(false);
-  };
-
-  // ── PROXY SETTINGS ──
-  const [proxyEnabled, setProxyEnabled] = useState(false);
-  const [proxyType, setProxyType] = useState<string>("socks5");
-  const [proxyHost, setProxyHost] = useState("");
-  const [proxyPort, setProxyPort] = useState("");
-  const [proxyLoaded, setProxyLoaded] = useState(false);
   const [nightMode] = useState(true);
   const [themeAccentColor, setThemeAccentColor] = useState(() =>
     normalizeHexColor(localStorage.getItem("theme_accent_color"), "#0e7c66"),
@@ -907,13 +764,6 @@ function App() {
   >([]);
   const [themeProfilesLoading, setThemeProfilesLoading] = useState(false);
   const [themeProfilesSharing, setThemeProfilesSharing] = useState(false);
-  const [settingsCategory, setSettingsCategory] = useState<
-    "general" | "call" | "design" | "security" | "developer"
-  >("general");
-  const [developerUnlocked, setDeveloperUnlocked] = useState(
-    () => localStorage.getItem("developer_unlocked") === "true",
-  );
-  const [developerTapCount, setDeveloperTapCount] = useState(0);
   const [brokenAvatarIds, setBrokenAvatarIds] = useState<Record<string, true>>(
     {},
   );
@@ -995,6 +845,16 @@ function App() {
     message: Message | GroupMessage;
     isGroup: boolean;
   } | null>(null);
+  const [messageReactions, setMessageReactions] = useState<
+    Record<string, Record<string, string[]>>
+  >(() => {
+    try {
+      const raw = localStorage.getItem("chat_message_reactions");
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
   const [draggedChatId, setDraggedChatId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
@@ -1002,11 +862,6 @@ function App() {
     {},
   );
   const [showMyProfile, setShowMyProfile] = useState(false);
-  const [editDisplayName, setEditDisplayName] = useState("");
-  const [editUsername, setEditUsername] = useState("");
-  const [editStatusText, setEditStatusText] = useState("");
-  const [editStatusEmoji, setEditStatusEmoji] = useState("");
-  const [profileSaving, setProfileSaving] = useState(false);
 
   // ── CHAT SEARCH ──
   const [chatSearch, setChatSearch] = useState("");
@@ -1023,6 +878,12 @@ function App() {
   const ringtoneFileInputRef = useRef<HTMLInputElement>(null);
   const dialToneFileInputRef = useRef<HTMLInputElement>(null);
 
+  // ── TEXT FORMATTING TOOLBAR STATE ──
+  const [showFormatBar, setShowFormatBar] = useState(false);
+  const [showFormatDropdown, setShowFormatDropdown] = useState(false);
+  const [showLinkPrompt, setShowLinkPrompt] = useState(false);
+  const [linkInputUrl, setLinkInputUrl] = useState("https://");
+
   // ── USER PROFILE VIEW (popup for any user) ──
   const [profileViewUser, setProfileViewUser] = useState<PublicUser | null>(
     null,
@@ -1031,9 +892,6 @@ function App() {
   // ── SHIFT+CLICK SELECTION ──
   const lastSelectedIndexRef = useRef<number | null>(null);
 
-  const [twoFAQrDataUrl, setTwoFAQrDataUrl] = useState("");
-  const [twoFASetupCode, setTwoFASetupCode] = useState("");
-  const [twoFADisableCode, setTwoFADisableCode] = useState("");
 
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [voiceBlob, setVoiceBlob] = useState<Blob | null>(null);
@@ -1046,6 +904,13 @@ function App() {
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(
     new Set(),
   );
+  const [deleteModalState, setDeleteModalState] = useState<{
+    isOpen: boolean;
+    messageIds: string[];
+    canDeleteForEveryone: boolean;
+    recipientName: string;
+    isGroup: boolean;
+  } | null>(null);
   const [showForwardModal, setShowForwardModal] = useState(false);
 
   const [callStatus, setCallStatus] = useState<CallStatus>("idle");
@@ -1072,6 +937,7 @@ function App() {
     connState: string;
     bytesSentTotal: number;
     bytesRecvTotal: number;
+    isReconnecting: boolean;
   }>({
     upKbps: 0,
     downKbps: 0,
@@ -1084,6 +950,7 @@ function App() {
     connState: "new",
     bytesSentTotal: 0,
     bytesRecvTotal: 0,
+    isReconnecting: false,
   });
   const [callEvents, setCallEvents] = useState<
     { t: number; msg: string; level: "info" | "warn" | "ok" | "err" }[]
@@ -1159,6 +1026,8 @@ function App() {
 
   // ── GROUP STATE ──
   const [chatMode, setChatMode] = useState<ChatMode>("user");
+  const chatModeRef = useRef(chatMode);
+  chatModeRef.current = chatMode;
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("contacts");
   const [mobileBottomTab, setMobileBottomTab] =
     useState<MobileBottomTab>("chats");
@@ -1199,6 +1068,8 @@ function App() {
       return {};
     }
   });
+  const participantVolumesRef = useRef<Record<string, number>>(participantVolumes);
+  participantVolumesRef.current = participantVolumes;
   const [participantLatencyMs, setParticipantLatencyMs] = useState<
     Record<string, number>
   >({});
@@ -1307,10 +1178,33 @@ function App() {
     new Map(),
   );
   const groupRemoteAudioStreamRef = useRef<MediaStream | null>(null);
+  const groupParticipantAudiosRef = useRef<Map<string, HTMLAudioElement>>(
+    new Map(),
+  );
+  const groupAudioContextRef = useRef<AudioContext | null>(null);
+  const groupAudioDestinationRef = useRef<MediaStreamAudioDestinationNode | null>(
+    null,
+  );
+  const groupAudioMasterGainRef = useRef<GainNode | null>(null);
+  const groupAudioSilentGainRef = useRef<GainNode | null>(null);
+  const groupAudioNodesRef = useRef<
+    Map<
+      string,
+      {
+        source: MediaStreamAudioSourceNode;
+        gain: GainNode;
+        stream: MediaStream;
+        track: MediaStreamTrack;
+      }
+    >
+  >(new Map());
   const callDisconnectedTimerRef = useRef<number | null>(null);
   const callStartTsRef = useRef<number>(0);
   const startCallRef = useRef<
     ((overridePeerId?: string) => Promise<void>) | null
+  >(null);
+  const stopCallRef = useRef<
+    ((keepRemoteState?: boolean, keepPersistentState?: boolean) => void) | null
   >(null);
   const autoResumeAttemptedRef = useRef<boolean>(false);
   const defaultThemeAppliedRef = useRef<boolean>(false);
@@ -1407,7 +1301,7 @@ function App() {
     };
   }, [enumerateAudioDevices]);
 
-  // Apply output device to <audio> element
+  // Apply output device to <audio> elements
   useEffect(() => {
     const audio = remoteAudioRef.current;
     if (
@@ -1421,13 +1315,28 @@ function App() {
         localStorage.removeItem("audio_output");
       });
     }
+    groupParticipantAudiosRef.current.forEach((participantAudio) => {
+      if (
+        selectedAudioOutput &&
+        typeof (participantAudio as any).setSinkId === "function"
+      ) {
+        (participantAudio as any)
+          .setSinkId(selectedAudioOutput)
+          .catch(() => {});
+      }
+    });
   }, [selectedAudioOutput]);
 
-  // Apply speaker volume to remote audio element
+  // Apply speaker volume to remote audio elements (direct and group participants)
   useEffect(() => {
+    const nextVolume = toMediaElementVolume(speakerVolume);
     const audio = remoteAudioRef.current;
-    if (audio) audio.volume = toMediaElementVolume(speakerVolume);
-  }, [speakerVolume]);
+    if (audio) audio.volume = nextVolume;
+    groupParticipantAudiosRef.current.forEach((participantAudio, uid) => {
+      const userVol = (participantVolumes[uid] ?? 100) / 100;
+      participantAudio.volume = Math.max(0, Math.min(1, userVol * nextVolume));
+    });
+  }, [speakerVolume, participantVolumes]);
 
   // ── Sidebar resize handler ──
   const handleSidebarMouseDown = useCallback(
@@ -1489,6 +1398,7 @@ function App() {
         connState: "new",
         bytesSentTotal: 0,
         bytesRecvTotal: 0,
+        isReconnecting: false,
       });
       return;
     }
@@ -1499,7 +1409,22 @@ function App() {
         const peers: RTCPeerConnection[] = [];
         if (peerConnectionRef.current) peers.push(peerConnectionRef.current);
         groupPeerConnectionsRef.current.forEach((pc) => peers.push(pc));
-        if (peers.length === 0) return;
+        if (peers.length === 0) {
+          if (callGroupIdRef.current) {
+            setCallStats((prev) => ({
+              ...prev,
+              upKbps: 0,
+              downKbps: 0,
+              rttMs: null,
+              lossPct: null,
+              jitterMs: null,
+              iceState: "new",
+              connState: "new",
+              isReconnecting: false,
+            }));
+          }
+          return;
+        }
 
         let bytesSent = 0;
         let bytesRecv = 0;
@@ -1582,6 +1507,36 @@ function App() {
         const lossPct = totalRecv > 0 ? (packetsLost / totalRecv) * 100 : null;
         const durationSec = Math.floor((now - callStartTsRef.current) / 1000);
 
+        const isGroupCall = Boolean(callGroupIdRef.current);
+        const primaryIceState = peers[0]?.iceConnectionState ?? "new";
+        const primaryConnState = peers[0]?.connectionState ?? "new";
+
+        const isIceConnected = peers.some(
+          (pc) =>
+            pc.iceConnectionState === "connected" ||
+            pc.iceConnectionState === "completed",
+        );
+        const isConnDisconnected =
+          primaryIceState === "disconnected" ||
+          primaryIceState === "failed" ||
+          primaryConnState === "disconnected" ||
+          primaryConnState === "failed";
+        const isSocketOk = socketRef.current ? socketRef.current.connected : true;
+        const isOnline = navigator.onLine;
+
+        // In a group call: reconnection is ONLY relevant if the user's socket or internet is down.
+        // In a direct call: reconnection is when socket/net is down, or an established connection disconnected/failed.
+        const isReconnecting = isGroupCall
+          ? (!isSocketOk || !isOnline)
+          : (!isSocketOk || !isOnline || isConnDisconnected);
+
+        // When internet or socket is down, or direct call connection actually dropped
+        if (!isSocketOk || !isOnline || (!isGroupCall && isConnDisconnected)) {
+          upKbps = 0;
+          downKbps = 0;
+          rttSec = null;
+        }
+
         setCallStats({
           upKbps: Math.round(upKbps * 10) / 10,
           downKbps: Math.round(downKbps * 10) / 10,
@@ -1593,10 +1548,11 @@ function App() {
           codec: codecHolder.mime
             ? codecHolder.mime.replace(/^audio\//, "")
             : null,
-          iceState: peers[0]?.iceConnectionState ?? "new",
-          connState: peers[0]?.connectionState ?? "new",
+          iceState: primaryIceState,
+          connState: primaryConnState,
           bytesSentTotal: bytesSent,
           bytesRecvTotal: bytesRecv,
+          isReconnecting,
         });
       } catch {
         // ignore transient getStats errors
@@ -2058,24 +2014,6 @@ function App() {
     return ` · ${mbps.toFixed(2)} Mbit/s (${mbyte.toFixed(2)} MB/s)`;
   }, [updateSpeedMbps]);
 
-  const handleDeveloperTap = useCallback(() => {
-    if (developerUnlocked) {
-      setSettingsCategory("developer");
-      return;
-    }
-    setDeveloperTapCount((prev) => {
-      const next = prev + 1;
-      if (next >= 3) {
-        setDeveloperUnlocked(true);
-        localStorage.setItem("developer_unlocked", "true");
-        setSettingsCategory("developer");
-        toast.success("Developer mode enabled");
-        return 0;
-      }
-      return next;
-    });
-  }, [developerUnlocked]);
-
   const saveCurrentThemeProfileLocally = useCallback(() => {
     const name =
       themeProfileName.trim() || `Theme ${localThemeProfiles.length + 1}`;
@@ -2335,30 +2273,6 @@ function App() {
     }
   };
 
-  const handleSetPasscode = () => {
-    if (newPasscode.length < 4) {
-      toast.error("Password must be at least 4 characters.");
-      return;
-    }
-    if (newPasscode !== confirmPasscode) {
-      toast.error("Passwords do not match.");
-      return;
-    }
-    localStorage.setItem("app_lock_hash", hashPasscode(newPasscode));
-    setAppLockEnabled(true);
-    setShowSetPasscode(false);
-    setNewPasscode("");
-    setConfirmPasscode("");
-    toast.success("App passcode set!");
-  };
-
-  const handleRemovePasscode = () => {
-    localStorage.removeItem("app_lock_hash");
-    setAppLockEnabled(false);
-    setAppLocked(false);
-    toast.success("App passcode removed.");
-  };
-
   const toggleStartup = async () => {
     if (!isWails) return;
     const next = !startupEnabled;
@@ -2404,9 +2318,6 @@ function App() {
     setCurrentUser(user);
     setIsSessionBootstrapping(false);
     setSessionBootstrapError(null);
-    setAuthStep("login");
-    setTempTwoFAToken("");
-    setTwoFALoginCode("");
   }, []);
 
   const clearSession = useCallback(() => {
@@ -2433,9 +2344,6 @@ function App() {
     setGroupMessages([]);
     setChatMode("user");
     setSidebarTab("contacts");
-    setTwoFAQrDataUrl("");
-    setTwoFASetupCode("");
-    setTwoFADisableCode("");
     disconnectSocket(socketRef);
   }, []);
 
@@ -2449,6 +2357,22 @@ function App() {
     setIsSessionBootstrapping(true);
     setSessionBootstrapError(null);
   }, [token]);
+
+  useEffect(() => {
+    const handleAuthExpired = (event: Event) => {
+      const customEvent = event as CustomEvent<{ message?: string }>;
+      const msg =
+        customEvent.detail?.message ||
+        "Sessiya eskirgan yoki bekor qilingan. Iltimos, qaytadan kiring.";
+      toast.error(msg);
+      clearSession();
+    };
+
+    window.addEventListener("chat:auth:expired", handleAuthExpired);
+    return () => {
+      window.removeEventListener("chat:auth:expired", handleAuthExpired);
+    };
+  }, [clearSession]);
 
   // ── GOOGLE SIGN-IN (Browser-based OAuth2 flow) ──
   const [googleAuthLoading, setGoogleAuthLoading] = useState(false);
@@ -2579,17 +2503,13 @@ function App() {
 
   const handleUpdateInstall = useCallback(
     async (targetVersion = "", allowSameVersion = false) => {
-      if (callStatusRef.current !== "idle") {
-        if (socketRef.current && callPeerIdRef.current) {
-          socketRef.current.emit("call:end", {
-            recipientId: callPeerIdRef.current,
-            reason: "ended",
-          });
-        }
-      }
+      // ⚠️ DO NOT drop call here! User can continue talking while downloading!
       setIsUpdating(true);
       setUpdateProgress(0);
       setUpdateSpeedMbps(null);
+      if (callStatusRef.current !== "idle") {
+        toast("Yangilanish yuklab olinmoqda... Qo'ng'iroq davom etadi.");
+      }
       try {
         const result: any = await DownloadAndUpdate(
           targetVersion,
@@ -2608,6 +2528,33 @@ function App() {
           setIsUpdating(false);
           setUpdateProgress(0);
           setUpdateSpeedMbps(null);
+          return;
+        }
+
+        // ✅ Download complete! Disconnect right before install & save state for auto-recall
+        if (callStatusRef.current !== "idle") {
+          const peerId = callPeerIdRef.current;
+          const groupId = callGroupIdRef.current;
+          if (peerId) {
+            saveActiveCallState({
+              peerId,
+              type: groupId ? "group" : "direct",
+              startedAt: Date.now(),
+              lastTickAt: Date.now(),
+            });
+            if (socketRef.current) {
+              if (groupId) {
+                socketRef.current.emit("group:call:leave", { groupId });
+              } else {
+                socketRef.current.emit("call:end", {
+                  recipientId: peerId,
+                  reason: "update_restart",
+                });
+              }
+            }
+          }
+          stopCallRef.current?.(true, true);
+          toast("Ilova yangilanmoqda va qayta ishga tushmoqda. Qo'ng'iroq qayta ulanadi...");
         }
       } catch {
         toast.error("Update error");
@@ -3050,7 +2997,7 @@ function App() {
       const me = currentUserIdRef.current;
 
       const canEmitSeen =
-        chatMode === "group" &&
+        chatModeRef.current === "group" &&
         selectedGroupIdRef.current === groupId &&
         document.hasFocus() &&
         (!isNativeMobileRuntime ||
@@ -3072,7 +3019,7 @@ function App() {
         });
       }
     },
-    [chatMode],
+    [],
   );
 
   const fetchGroupMessages = useCallback(
@@ -3294,7 +3241,7 @@ function App() {
   }, []);
 
   const stopCall = useCallback(
-    (keepRemoteState = false) => {
+    (keepRemoteState = false, keepPersistentState = false) => {
       if (callDisconnectedTimerRef.current) {
         window.clearTimeout(callDisconnectedTimerRef.current);
         callDisconnectedTimerRef.current = null;
@@ -3329,6 +3276,14 @@ function App() {
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = null;
       }
+      groupParticipantAudiosRef.current.forEach((audioEl) => {
+        try {
+          audioEl.pause();
+          audioEl.srcObject = null;
+          audioEl.remove();
+        } catch {}
+      });
+      groupParticipantAudiosRef.current.clear();
       groupPeerConnectionsRef.current.forEach((peer) => {
         peer.close();
       });
@@ -3342,6 +3297,32 @@ function App() {
       groupRemoteIceCandidatesBufferRef.current.clear();
       groupRemoteAudioTracksRef.current.clear();
       groupRemoteAudioStreamRef.current = null;
+      groupAudioNodesRef.current.forEach((node) => {
+        try {
+          node.source.disconnect();
+          node.gain.disconnect();
+        } catch {}
+      });
+      groupAudioNodesRef.current.clear();
+      if (groupAudioMasterGainRef.current) {
+        try {
+          groupAudioMasterGainRef.current.disconnect();
+        } catch {}
+        groupAudioMasterGainRef.current = null;
+      }
+      if (groupAudioSilentGainRef.current) {
+        try {
+          groupAudioSilentGainRef.current.disconnect();
+        } catch {}
+        groupAudioSilentGainRef.current = null;
+      }
+      if (groupAudioContextRef.current) {
+        try {
+          groupAudioContextRef.current.close().catch(() => {});
+        } catch {}
+        groupAudioContextRef.current = null;
+      }
+      groupAudioDestinationRef.current = null;
 
       if (!keepRemoteState && socketRef.current) {
         if (callGroupIdRef.current) {
@@ -3356,7 +3337,9 @@ function App() {
         }
       }
       // Clear persistent active-call state (graceful end → no auto-resume)
-      clearActiveCallState();
+      if (!keepPersistentState) {
+        clearActiveCallState();
+      }
       callGroupIdRef.current = null;
       pendingIceCandidatesRef.current = [];
       remoteIceCandidatesBufferRef.current = [];
@@ -3377,9 +3360,24 @@ function App() {
       setCallStatus("idle");
       setCallPeerId(null);
       setIncomingCall(null);
+      setCallStats({
+        upKbps: 0,
+        downKbps: 0,
+        rttMs: null,
+        lossPct: null,
+        durationSec: 0,
+        jitterMs: null,
+        codec: null,
+        iceState: "new",
+        connState: "new",
+        bytesSentTotal: 0,
+        bytesRecvTotal: 0,
+        isReconnecting: false,
+      });
     },
     [clearMobileCallNotification],
   );
+  stopCallRef.current = stopCall;
 
   const toggleCallMicMute = useCallback(() => {
     if (callStatusRef.current === "idle") return;
@@ -3624,13 +3622,53 @@ function App() {
   const speakerVolumeRef = useRef(speakerVolume);
   speakerVolumeRef.current = speakerVolume;
 
+  const ensureGroupAudioGraph = useCallback(() => {
+    let ctx = groupAudioContextRef.current;
+    if (!ctx || ctx.state === "closed") {
+      const AudioContextClass =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext;
+      ctx = new AudioContextClass();
+      groupAudioContextRef.current = ctx;
+    }
+    if (ctx.state === "suspended") {
+      ctx.resume().catch(() => {});
+    }
+
+    let master = groupAudioMasterGainRef.current;
+    let dest = groupAudioDestinationRef.current;
+
+    if (!dest || !master) {
+      dest = ctx.createMediaStreamDestination();
+      groupAudioDestinationRef.current = dest;
+
+      master = ctx.createGain();
+      master.gain.value = 1.0;
+      master.connect(dest);
+
+      const silentGain = ctx.createGain();
+      silentGain.gain.value = 0;
+      master.connect(silentGain);
+      silentGain.connect(ctx.destination);
+      groupAudioSilentGainRef.current = silentGain;
+
+      groupAudioMasterGainRef.current = master;
+    }
+
+    return { ctx, dest, master };
+  }, []);
+
   const syncGroupRemoteAudio = useCallback(() => {
     const audio = remoteAudioRef.current;
     if (!audio) return;
-    if (!groupRemoteAudioStreamRef.current) {
-      groupRemoteAudioStreamRef.current = new MediaStream();
+    const { dest, ctx } = ensureGroupAudioGraph();
+    if (ctx.state === "suspended") {
+      ctx.resume().catch(() => {});
     }
-    audio.srcObject = groupRemoteAudioStreamRef.current;
+    if (audio.srcObject !== dest.stream) {
+      audio.srcObject = dest.stream;
+    }
     audio.muted = false;
     audio.volume = toMediaElementVolume(speakerVolumeRef.current);
     if (
@@ -3648,6 +3686,136 @@ function App() {
         });
     }
     audio.play().catch(() => {});
+  }, [ensureGroupAudioGraph]);
+
+  const attachGroupParticipantTrack = useCallback(
+    (targetUserId: string, track: MediaStreamTrack) => {
+      // 1. Direct dedicated HTMLAudioElement for this participant (rock-solid native WebRTC playback)
+      let audioEl = groupParticipantAudiosRef.current.get(targetUserId);
+      if (!audioEl) {
+        audioEl = document.createElement("audio");
+        audioEl.autoplay = true;
+        (audioEl as any).playsInline = true;
+        audioEl.style.display = "none";
+        document.body.appendChild(audioEl);
+        groupParticipantAudiosRef.current.set(targetUserId, audioEl);
+      }
+      const stream = new MediaStream([track]);
+      audioEl.srcObject = stream;
+      audioEl.muted = false;
+      const savedVol = participantVolumesRef.current[targetUserId] ?? 100;
+      audioEl.volume = Math.max(
+        0,
+        Math.min(
+          1,
+          (savedVol / 100) * toMediaElementVolume(speakerVolumeRef.current),
+        ),
+      );
+      if (
+        selectedAudioOutputRef.current &&
+        typeof (audioEl as any).setSinkId === "function"
+      ) {
+        (audioEl as any)
+          .setSinkId(selectedAudioOutputRef.current)
+          .catch((err: any) => {
+            console.warn("[WebRTC] group audio setSinkId failed:", err);
+          });
+      }
+
+      let attempts = 0;
+      const tryPlay = () => {
+        if (callStatusRef.current === "idle") return;
+        attempts++;
+        audioEl!
+          .play()
+          .then(() => {
+            console.log(
+              `[WebRTC] Group remote audio playing for ${targetUserId} (attempt ${attempts})`,
+            );
+          })
+          .catch((err) => {
+            console.warn(
+              `[WebRTC] group audio.play() for ${targetUserId} attempt ${attempts} failed:`,
+              err,
+            );
+            if (attempts < 20) {
+              setTimeout(tryPlay, 300);
+            }
+          });
+      };
+      tryPlay();
+
+      track.onunmute = () => {
+        console.log(
+          `[WebRTC] Group remote audio track unmuted for ${targetUserId}`,
+        );
+        attempts = 0;
+        tryPlay();
+      };
+
+      // 2. Also maintain WebAudio graph for visualizer / CallOverlay level meters
+      try {
+        const { ctx, master } = ensureGroupAudioGraph();
+        if (ctx.state === "suspended") {
+          ctx.resume().catch(() => {});
+        }
+
+        const prev = groupAudioNodesRef.current.get(targetUserId);
+        if (prev) {
+          if (prev.track.id === track.id) {
+            groupRemoteAudioTracksRef.current.set(targetUserId, track);
+            return;
+          }
+          try {
+            prev.source.disconnect();
+            prev.gain.disconnect();
+          } catch {}
+          groupAudioNodesRef.current.delete(targetUserId);
+        }
+
+        const source = ctx.createMediaStreamSource(stream);
+        const gain = ctx.createGain();
+        gain.gain.value = Math.max(0, savedVol / 100);
+
+        source.connect(gain);
+        gain.connect(master);
+
+        groupAudioNodesRef.current.set(targetUserId, {
+          source,
+          gain,
+          stream,
+          track,
+        });
+        syncGroupRemoteAudio();
+      } catch (err) {
+        console.warn("[WebRTC] attachGroupParticipantTrack WebAudio warning:", err);
+      }
+
+      groupRemoteAudioTracksRef.current.set(targetUserId, track);
+    },
+    [ensureGroupAudioGraph, syncGroupRemoteAudio],
+  );
+
+  const detachGroupParticipantTrack = useCallback((targetUserId: string) => {
+    const audioEl = groupParticipantAudiosRef.current.get(targetUserId);
+    if (audioEl) {
+      try {
+        audioEl.pause();
+        audioEl.srcObject = null;
+        audioEl.remove();
+      } catch {}
+      groupParticipantAudiosRef.current.delete(targetUserId);
+    }
+
+    const node = groupAudioNodesRef.current.get(targetUserId);
+    if (node) {
+      try {
+        node.source.disconnect();
+        node.gain.disconnect();
+      } catch {}
+      groupAudioNodesRef.current.delete(targetUserId);
+    }
+    groupRemoteAudioTracksRef.current.delete(targetUserId);
   }, []);
 
   const removeGroupPeerConnection = useCallback(
@@ -3660,14 +3828,9 @@ function App() {
       }
       groupRemoteDescriptionSetRef.current.delete(targetUserId);
       groupRemoteIceCandidatesBufferRef.current.delete(targetUserId);
-      const track = groupRemoteAudioTracksRef.current.get(targetUserId);
-      if (track) {
-        groupRemoteAudioStreamRef.current?.removeTrack(track);
-        groupRemoteAudioTracksRef.current.delete(targetUserId);
-        syncGroupRemoteAudio();
-      }
+      detachGroupParticipantTrack(targetUserId);
     },
-    [stopGroupPeerStats, syncGroupRemoteAudio],
+    [detachGroupParticipantTrack, stopGroupPeerStats],
   );
 
   const setupGroupPeerConnection = useCallback(
@@ -3705,26 +3868,10 @@ function App() {
         if (event.track.kind !== "audio") {
           return;
         }
-        if (!groupRemoteAudioStreamRef.current) {
-          groupRemoteAudioStreamRef.current = new MediaStream();
-        }
-        const prevTrack = groupRemoteAudioTracksRef.current.get(targetUserId);
-        if (prevTrack && prevTrack.id !== event.track.id) {
-          groupRemoteAudioStreamRef.current.removeTrack(prevTrack);
-        }
-        if (prevTrack?.id !== event.track.id) {
-          groupRemoteAudioTracksRef.current.set(targetUserId, event.track);
-          groupRemoteAudioStreamRef.current.addTrack(event.track);
-        }
+        attachGroupParticipantTrack(targetUserId, event.track);
         event.track.onended = () => {
-          const active = groupRemoteAudioTracksRef.current.get(targetUserId);
-          if (active?.id === event.track.id) {
-            groupRemoteAudioStreamRef.current?.removeTrack(event.track);
-            groupRemoteAudioTracksRef.current.delete(targetUserId);
-            syncGroupRemoteAudio();
-          }
+          detachGroupParticipantTrack(targetUserId);
         };
-        syncGroupRemoteAudio();
       };
 
       peer.onconnectionstatechange = () => {
@@ -3755,9 +3902,10 @@ function App() {
       return peer;
     },
     [
+      attachGroupParticipantTrack,
+      detachGroupParticipantTrack,
       logSelectedIceRoute,
       removeGroupPeerConnection,
-      syncGroupRemoteAudio,
       updateGroupPeerLatency,
     ],
   );
@@ -3805,8 +3953,9 @@ function App() {
           userId: payload.fromUserId,
           kind: "incoming-call",
         });
-        // Show call notification via Wails
+        // Show call notification via Wails & bring window to front
         ShowCallNotif(callerName).catch(() => {});
+        ShowWindow().catch(() => {});
         if (isNativeMobileRuntime) {
           await showMobileIncomingCallNotification(
             "Incoming call",
@@ -3939,6 +4088,10 @@ function App() {
       );
 
       socket.on("call:end", (payload?: DirectCallEndPayload) => {
+        // Direct 1-on-1 call end should NOT kill an active group call
+        if (callGroupIdRef.current) {
+          return;
+        }
         if (callStatusRef.current !== "idle") {
           stopCall(true);
           playEndCallSound();
@@ -3948,25 +4101,78 @@ function App() {
 
       socket.on("disconnect", () => {
         if (callStatusRef.current !== "idle") {
-          stopCall(true);
-          toast.error("Internet uzildi. Call tugatildi.");
+          console.warn("[WebRTC] Signaling socket disconnected during call. Waiting for reconnect...");
+          if (!callDisconnectedTimerRef.current) {
+            callDisconnectedTimerRef.current = window.setTimeout(() => {
+              callDisconnectedTimerRef.current = null;
+              if (callStatusRef.current !== "idle" && !socketRef.current?.connected) {
+                stopCall(true);
+                toast.error("Aloqa uzildi (3 daqiqa kutildi). Call tugatildi.");
+              }
+            }, 180000);
+          }
         }
       });
     },
     [notifyIncoming, stopCall],
   );
 
+  const toggleReaction = useCallback(
+    (messageId: string, emoji: string, isGroup?: boolean) => {
+      const myId = currentUserIdRef.current;
+      if (!myId) return;
+
+      setMessageReactions((prev) => {
+        const msgReactions = { ...(prev[messageId] || {}) };
+        const userList = [...(msgReactions[emoji] || [])];
+        const existsIndex = userList.indexOf(myId);
+        if (existsIndex >= 0) {
+          userList.splice(existsIndex, 1);
+          if (userList.length === 0) {
+            delete msgReactions[emoji];
+          } else {
+            msgReactions[emoji] = userList;
+          }
+        } else {
+          userList.push(myId);
+          msgReactions[emoji] = userList;
+        }
+        const next = { ...prev, [messageId]: msgReactions };
+        try {
+          localStorage.setItem("chat_message_reactions", JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+
+      if (socketRef.current) {
+        if (isGroup && selectedGroupIdRef.current) {
+          socketRef.current.emit("group:message:react", {
+            groupId: selectedGroupIdRef.current,
+            messageId,
+            emoji,
+          });
+        } else if (selectedUserIdRef.current) {
+          socketRef.current.emit("message:react", {
+            recipientId: selectedUserIdRef.current,
+            messageId,
+            emoji,
+          });
+        }
+      }
+    },
+    [],
+  );
+
   const attachChatHandlers = useCallback(
     (socket: Socket) => {
       socket.on("presence:update", (payload: PresencePayload) => {
-        let knownUser = true;
-        setUsers((prev) => {
-          const exists = prev.some((user) => user.id === payload.userId);
-          knownUser = exists;
-          if (!exists) {
-            return prev;
-          }
-          return prev.map((user) =>
+        const isKnown = usersRef.current.some((user) => user.id === payload.userId);
+        if (!isKnown && payload.userId !== currentUserIdRef.current) {
+          fetchUsers().catch(() => undefined);
+          return;
+        }
+        setUsers((prev) =>
+          prev.map((user) =>
             user.id === payload.userId
               ? {
                   ...user,
@@ -3976,11 +4182,8 @@ function App() {
                   clientVersion: payload.clientVersion ?? user.clientVersion,
                 }
               : user,
-          );
-        });
-        if (!knownUser) {
-          fetchUsers().catch(() => undefined);
-        }
+          ),
+        );
       });
 
       socket.on(
@@ -4021,14 +4224,12 @@ function App() {
           username: string | null;
           avatarUrl: string | null;
         }) => {
-          let knownUser = true;
-          setUsers((prev) => {
-            const exists = prev.some((user) => user.id === payload.userId);
-            knownUser = exists;
-            if (!exists) {
-              return prev;
-            }
-            return prev.map((user) =>
+          const isKnown = usersRef.current.some((user) => user.id === payload.userId);
+          if (!isKnown && payload.userId !== currentUserIdRef.current) {
+            fetchUsers().catch(() => undefined);
+          }
+          setUsers((prev) =>
+            prev.map((user) =>
               user.id === payload.userId
                 ? {
                     ...user,
@@ -4037,11 +4238,8 @@ function App() {
                     avatarUrl: payload.avatarUrl,
                   }
                 : user,
-            );
-          });
-          if (!knownUser) {
-            fetchUsers().catch(() => undefined);
-          }
+            ),
+          );
           // Also update currentUser if it's me
           setCurrentUser((prev) =>
             prev && prev.id === payload.userId
@@ -4194,6 +4392,51 @@ function App() {
           );
         },
       );
+
+      socket.on(
+        "message:react",
+        (payload: { messageId: string; userId: string; emoji: string }) => {
+          if (!payload?.messageId || !payload?.emoji) return;
+          setMessageReactions((prev) => {
+            const msgReactions = { ...(prev[payload.messageId] || {}) };
+            const userList = [...(msgReactions[payload.emoji] || [])];
+            if (!userList.includes(payload.userId)) {
+              userList.push(payload.userId);
+              msgReactions[payload.emoji] = userList;
+            }
+            const next = { ...prev, [payload.messageId]: msgReactions };
+            try {
+              localStorage.setItem("chat_message_reactions", JSON.stringify(next));
+            } catch {}
+            return next;
+          });
+        },
+      );
+
+      socket.on(
+        "group:message:react",
+        (payload: {
+          groupId: string;
+          messageId: string;
+          userId: string;
+          emoji: string;
+        }) => {
+          if (!payload?.messageId || !payload?.emoji) return;
+          setMessageReactions((prev) => {
+            const msgReactions = { ...(prev[payload.messageId] || {}) };
+            const userList = [...(msgReactions[payload.emoji] || [])];
+            if (!userList.includes(payload.userId)) {
+              userList.push(payload.userId);
+              msgReactions[payload.emoji] = userList;
+            }
+            const next = { ...prev, [payload.messageId]: msgReactions };
+            try {
+              localStorage.setItem("chat_message_reactions", JSON.stringify(next));
+            } catch {}
+            return next;
+          });
+        },
+      );
     },
     [fetchUsers, notifyIncoming],
   );
@@ -4202,13 +4445,21 @@ function App() {
     (socket: Socket) => {
       socket.on("group:created", (group: Group) => {
         setGroups((prev) => {
-          if (prev.some((g) => g.id === group.id)) return prev;
+          if (prev.some((g) => g.id === group.id)) {
+            return prev.map((g) => (g.id === group.id ? group : g));
+          }
           return [group, ...prev];
         });
       });
 
       socket.on("group:updated", (group: Group) => {
-        setGroups((prev) => prev.map((g) => (g.id === group.id ? group : g)));
+        setGroups((prev) => {
+          const exists = prev.some((g) => g.id === group.id);
+          if (!exists) {
+            return [group, ...prev];
+          }
+          return prev.map((g) => (g.id === group.id ? group : g));
+        });
       });
 
       socket.on("group:removed", (payload: { groupId: string }) => {
@@ -4415,7 +4666,26 @@ function App() {
             return;
           }
 
-          const peer = setupGroupPeerConnection(payload.fromUserId);
+          const existingPeer = groupPeerConnectionsRef.current.get(
+            payload.fromUserId,
+          );
+          let peer = existingPeer;
+          if (
+            !peer ||
+            peer.connectionState === "closed" ||
+            peer.connectionState === "failed" ||
+            peer.iceConnectionState === "failed" ||
+            peer.iceConnectionState === "disconnected"
+          ) {
+            peer = setupGroupPeerConnection(payload.fromUserId);
+          } else if (peer.signalingState === "have-local-offer") {
+            try {
+              await peer.setLocalDescription({ type: "rollback" });
+            } catch {
+              peer = setupGroupPeerConnection(payload.fromUserId);
+            }
+          }
+
           await peer.setRemoteDescription(
             new RTCSessionDescription(payload.sdp),
           );
@@ -4557,15 +4827,15 @@ function App() {
           const existingPeer = groupPeerConnectionsRef.current.get(
             payload.userId,
           );
+          if (
+            existingPeer &&
+            existingPeer.connectionState === "connected" &&
+            (existingPeer.iceConnectionState === "connected" ||
+              existingPeer.iceConnectionState === "completed")
+          ) {
+            return;
+          }
           if (existingPeer) {
-            const state = existingPeer.connectionState;
-            if (
-              state === "connected" ||
-              state === "connecting" ||
-              state === "new"
-            ) {
-              return;
-            }
             removeGroupPeerConnection(payload.userId);
           }
 
@@ -4609,6 +4879,16 @@ function App() {
           setGroupCallParticipants((prev) =>
             prev.filter((p) => p.userId !== payload.userId),
           );
+          if (groupPeerConnectionsRef.current.size === 0) {
+            setCallStats((prev) => ({
+              ...prev,
+              upKbps: 0,
+              downKbps: 0,
+              rttMs: null,
+              lossPct: null,
+              isReconnecting: false,
+            }));
+          }
         },
       );
 
@@ -4705,13 +4985,27 @@ function App() {
         socketRef.current = socket;
         setIsSocketConnected(socket.connected);
         socket.on("connect", () => {
+          hasSocketConnectedOnceRef.current = true;
           setIsSocketConnected(true);
+          if (callDisconnectedTimerRef.current && callStatusRef.current !== "idle") {
+            window.clearTimeout(callDisconnectedTimerRef.current);
+            callDisconnectedTimerRef.current = null;
+          }
           if (selectedGroupIdRef.current) {
             requestGroupCallStatus(selectedGroupIdRef.current);
           }
         });
         socket.on("disconnect", () => {
           setIsSocketConnected(false);
+          if (callStatusRef.current !== "idle" && !callDisconnectedTimerRef.current) {
+            callDisconnectedTimerRef.current = window.setTimeout(() => {
+              callDisconnectedTimerRef.current = null;
+              if (callStatusRef.current !== "idle") {
+                stopCall(false);
+                toast.error("Internet aloqasi tiklanmadi. Qo'ng'iroq tugatildi.");
+              }
+            }, 25000);
+          }
         });
         socket.on("connect_error", () => {
           setIsSocketConnected(false);
@@ -4808,161 +5102,7 @@ function App() {
     requestGroupCallStatus,
   ]);
 
-  const handleRegister = async (event: FormEvent) => {
-    event.preventDefault();
-    setIsSubmittingAuth(true);
-    try {
-      await api.post("/auth/register", {
-        email: registerEmail.trim().toLowerCase(),
-        password: registerPassword,
-        displayName: registerDisplayName.trim(),
-      });
-      setVerifyEmail(registerEmail.trim().toLowerCase());
-      setAuthStep("verify");
-      toast.success("Verification code sent to your email.");
-    } catch (error) {
-      toast.error(readAxiosMessage(error, "Registration error."));
-    } finally {
-      setIsSubmittingAuth(false);
-    }
-  };
 
-  const handleVerifyEmail = async (event: FormEvent) => {
-    event.preventDefault();
-    setIsSubmittingAuth(true);
-    try {
-      const response = await api.post<{ token: string; user: PublicUser }>(
-        "/auth/verify-email",
-        {
-          email: verifyEmail.trim().toLowerCase(),
-          code: verifyCode.trim(),
-        },
-      );
-      applySession(response.data.token, response.data.user);
-      toast.success("Email verified.");
-    } catch (error) {
-      toast.error(readAxiosMessage(error, "Verification failed."));
-    } finally {
-      setIsSubmittingAuth(false);
-    }
-  };
-
-  const handleLogin = async (event: FormEvent) => {
-    event.preventDefault();
-    setIsSubmittingAuth(true);
-    try {
-      const response = await api.post<
-        | { token: string; user: PublicUser; requiresTwoFA?: false }
-        | { requiresTwoFA: true; tempToken: string }
-      >("/auth/login", {
-        email: loginEmail.trim().toLowerCase(),
-        password: loginPassword,
-      });
-
-      if ("requiresTwoFA" in response.data && response.data.requiresTwoFA) {
-        setTempTwoFAToken(response.data.tempToken);
-        setAuthStep("login2fa");
-        toast("Enter 2FA code.");
-        return;
-      }
-
-      applySession(response.data.token, response.data.user);
-      toast.success("Welcome.");
-    } catch (error) {
-      toast.error(readAxiosMessage(error, "Login error."));
-    } finally {
-      setIsSubmittingAuth(false);
-    }
-  };
-
-  const handle2FALogin = async (event: FormEvent) => {
-    event.preventDefault();
-    setIsSubmittingAuth(true);
-    try {
-      const response = await api.post<{ token: string; user: PublicUser }>(
-        "/auth/login/2fa",
-        {
-          tempToken: tempTwoFAToken,
-          code: twoFALoginCode.trim(),
-        },
-      );
-      applySession(response.data.token, response.data.user);
-      toast.success("2FA verified.");
-    } catch (error) {
-      toast.error(readAxiosMessage(error, "2FA login error."));
-    } finally {
-      setIsSubmittingAuth(false);
-    }
-  };
-
-  const handleForgotPassword = async (event: FormEvent) => {
-    event.preventDefault();
-    setIsSubmittingAuth(true);
-    try {
-      await api.post("/auth/forgot-password", {
-        email: forgotEmail.trim().toLowerCase(),
-      });
-      setVerifyEmail(forgotEmail.trim().toLowerCase());
-      setAuthStep("reset");
-      toast.success("Password reset code sent.");
-    } catch (error) {
-      toast.error(readAxiosMessage(error, "Forgot password error."));
-    } finally {
-      setIsSubmittingAuth(false);
-    }
-  };
-
-  const handleResetPassword = async (event: FormEvent) => {
-    event.preventDefault();
-    setIsSubmittingAuth(true);
-    try {
-      await api.post("/auth/reset-password", {
-        email: verifyEmail.trim().toLowerCase(),
-        code: resetCode.trim(),
-        newPassword: resetPassword,
-      });
-      setAuthStep("login");
-      toast.success("Password updated.");
-    } catch (error) {
-      toast.error(readAxiosMessage(error, "Password update error."));
-    } finally {
-      setIsSubmittingAuth(false);
-    }
-  };
-
-  const startTwoFASetup = async () => {
-    try {
-      const response = await api.post<{ qrDataUrl: string }>("/auth/2fa/setup");
-      setTwoFAQrDataUrl(response.data.qrDataUrl);
-      setTwoFASetupCode("");
-      toast("Scan the QR code in your Authenticator app.");
-    } catch (error) {
-      toast.error(readAxiosMessage(error, "2FA setup error."));
-    }
-  };
-
-  const enableTwoFA = async () => {
-    try {
-      await api.post("/auth/2fa/enable", { code: twoFASetupCode.trim() });
-      setTwoFAQrDataUrl("");
-      setTwoFASetupCode("");
-      await fetchMe();
-      toast.success("2FA enabled.");
-    } catch (error) {
-      toast.error(readAxiosMessage(error, "Failed to enable 2FA."));
-    }
-  };
-
-  const disableTwoFA = async () => {
-    try {
-      await api.post("/auth/2fa/disable", { code: twoFADisableCode.trim() });
-      setTwoFADisableCode("");
-      await fetchMe();
-      toast.success("2FA disabled.");
-    } catch (error) {
-      toast.error(readAxiosMessage(error, "Failed to disable 2FA."));
-    }
-  };
 
   const sendTypingSignal = useCallback(
     (isTyping: boolean) => {
@@ -5162,6 +5302,157 @@ function App() {
     }, 0);
   };
 
+  // ── TEXT FORMATTING ACTIONS (Bold, Italic, Link, etc.) ──
+  const applyFormatting = useCallback(
+    (
+      type:
+        | "bold"
+        | "italic"
+        | "strike"
+        | "mono"
+        | "spoiler"
+        | "underline"
+        | "quote"
+        | "clear",
+    ) => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      if (start == null || end == null || start === end) return;
+
+      const selected = messageText.slice(start, end);
+      let newText = "";
+      let newCursorStart = start;
+      let newCursorEnd = end;
+
+      if (type === "clear") {
+        let cleaned = selected;
+        cleaned = cleaned.replace(/^(\*\*|\*|__|_|~~|`|\|\||> )+/, "");
+        cleaned = cleaned.replace(/(\*\*|\*|__|_|~~|`|\|\|)+$/, "");
+        newText = messageText.slice(0, start) + cleaned + messageText.slice(end);
+        newCursorStart = start;
+        newCursorEnd = start + cleaned.length;
+      } else {
+        let prefix = "";
+        let suffix = "";
+
+        switch (type) {
+          case "bold":
+            prefix = "**";
+            suffix = "**";
+            break;
+          case "italic":
+            prefix = "*";
+            suffix = "*";
+            break;
+          case "strike":
+            prefix = "~~";
+            suffix = "~~";
+            break;
+          case "mono":
+            prefix = "`";
+            suffix = "`";
+            break;
+          case "spoiler":
+            prefix = "||";
+            suffix = "||";
+            break;
+          case "underline":
+            prefix = "__";
+            suffix = "__";
+            break;
+          case "quote":
+            prefix = "> ";
+            suffix = "";
+            break;
+        }
+
+        if (
+          prefix &&
+          suffix &&
+          selected.startsWith(prefix) &&
+          selected.endsWith(suffix) &&
+          selected.length >= prefix.length + suffix.length
+        ) {
+          // Unwrap selection
+          const unwrapped = selected.slice(
+            prefix.length,
+            selected.length - suffix.length,
+          );
+          newText =
+            messageText.slice(0, start) + unwrapped + messageText.slice(end);
+          newCursorStart = start;
+          newCursorEnd = start + unwrapped.length;
+        } else if (
+          prefix &&
+          suffix &&
+          start >= prefix.length &&
+          messageText.slice(start - prefix.length, start) === prefix &&
+          messageText.slice(end, end + suffix.length) === suffix
+        ) {
+          // Unwrap outer text
+          newText =
+            messageText.slice(0, start - prefix.length) +
+            selected +
+            messageText.slice(end + suffix.length);
+          newCursorStart = start - prefix.length;
+          newCursorEnd = end - prefix.length;
+        } else {
+          // Wrap selection
+          const wrapped = prefix + selected + suffix;
+          newText = messageText.slice(0, start) + wrapped + messageText.slice(end);
+          newCursorStart = start + prefix.length;
+          newCursorEnd = start + prefix.length + selected.length;
+        }
+      }
+
+      setMessageText(newText);
+      setShowFormatBar(false);
+      setShowFormatDropdown(false);
+      setShowLinkPrompt(false);
+
+      setTimeout(() => {
+        if (ta) {
+          ta.focus();
+          ta.setSelectionRange(newCursorStart, newCursorEnd);
+        }
+      }, 0);
+    },
+    [messageText],
+  );
+
+  const applyLinkFormatting = useCallback(
+    (url: string) => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      if (start == null || end == null || start === end) return;
+
+      const selected = messageText.slice(start, end);
+      const cleanUrl = url.trim() || "https://";
+      const wrapped = `[${selected}](${cleanUrl})`;
+      const newText =
+        messageText.slice(0, start) + wrapped + messageText.slice(end);
+
+      setMessageText(newText);
+      setShowFormatBar(false);
+      setShowFormatDropdown(false);
+      setShowLinkPrompt(false);
+      setLinkInputUrl("https://");
+
+      setTimeout(() => {
+        if (ta) {
+          ta.focus();
+          const pos = start + wrapped.length;
+          ta.setSelectionRange(pos, pos);
+        }
+      }, 0);
+    },
+    [messageText],
+  );
+
   /** Open profile popup for a mentioned user */
   const handleMentionClick = useCallback(
     (userId: string) => {
@@ -5176,7 +5467,46 @@ function App() {
   const applyRNNoiseFilter = async (
     rawStream: MediaStream,
   ): Promise<MediaStream> => {
-    if (!noiseReduction || !rnnoiseAssetsRef.current) return rawStream;
+    if (!noiseReduction || !rnnoiseAssetsRef.current) {
+      try {
+        const audioCtx = new AudioContext();
+        if (audioCtx.state === "suspended") {
+          await audioCtx.resume();
+        }
+        const source = audioCtx.createMediaStreamSource(rawStream);
+        const outputGain = audioCtx.createGain();
+        outputGain.gain.value = normalizeVolumeLevel(micVolume);
+        micGainNodeRef.current = outputGain;
+        const destination = audioCtx.createMediaStreamDestination();
+        source.connect(outputGain);
+        outputGain.connect(destination);
+
+        const silentGain = audioCtx.createGain();
+        silentGain.gain.value = 0;
+        outputGain.connect(silentGain);
+        silentGain.connect(audioCtx.destination);
+
+        const processedStream = destination.stream;
+        const originalTracks = rawStream.getTracks();
+        const cleanup = () => {
+          originalTracks.forEach((ot) => ot.stop());
+          if (micGainNodeRef.current === outputGain) {
+            micGainNodeRef.current = null;
+          }
+          audioCtx.close().catch(() => {});
+        };
+        processedStream.getTracks().forEach((t) => {
+          const oldStop = t.stop.bind(t);
+          t.stop = () => {
+            oldStop();
+            cleanup();
+          };
+        });
+        return processedStream;
+      } catch {
+        return rawStream;
+      }
+    }
     try {
       const audioCtx = new AudioContext();
       if (audioCtx.state === "suspended") {
@@ -5441,7 +5771,6 @@ function App() {
     formData.append("file", file);
     setUploadProgress(0);
     const response = await api.post<UploadResponse>("/upload", formData, {
-      headers: { "Content-Type": "multipart/form-data" },
       onUploadProgress: (progressEvent) => {
         if (progressEvent.total) {
           setUploadProgress(
@@ -6091,6 +6420,25 @@ function App() {
         }
       };
 
+      const triggerIceRestart = async () => {
+        try {
+          if (!peer || peer.signalingState === "closed") return;
+          peer.restartIce();
+          const offer = await peer.createOffer({ iceRestart: true });
+          await peer.setLocalDescription(offer);
+          if (callPeerIdRef.current && socketRef.current?.connected) {
+            socketRef.current.emit("call:renegotiate", {
+              recipientId: callPeerIdRef.current,
+              type: "offer",
+              sdp: offer,
+            });
+            console.info("[WebRTC] Sent ICE restart renegotiation offer");
+          }
+        } catch (err) {
+          console.warn("[WebRTC] restartIce / renegotiate failed:", err);
+        }
+      };
+
       // Monitor ICE connection state
       peer.oniceconnectionstatechange = () => {
         const state = peer.iceConnectionState;
@@ -6106,27 +6454,30 @@ function App() {
                 : "info",
         );
         if (state === "failed") {
-          if (callDisconnectedTimerRef.current) {
-            window.clearTimeout(callDisconnectedTimerRef.current);
-            callDisconnectedTimerRef.current = null;
-          }
-          toast.error("Connection lost. Reconnecting...");
+          toast.error("Aloqa uzildi. Qayta ulanish kutilmoqda...");
           pushCallEvent("restartIce() — failed state", "warn");
-          peer.restartIce();
-        } else if (state === "disconnected") {
-          toast("Connection temporarily lost...");
-          pushCallEvent("restartIce() — disconnected (immediate)", "warn");
-          try {
-            peer.restartIce();
-          } catch {}
+          void triggerIceRestart();
           if (!callDisconnectedTimerRef.current) {
             callDisconnectedTimerRef.current = window.setTimeout(() => {
               callDisconnectedTimerRef.current = null;
               if (callStatusRef.current !== "idle") {
                 stopCall(false);
-                toast.error("Connection tiklanmadi. Call tugatildi.");
+                toast.error("Aloqa tiklanmadi (25s kutildi). Qo'ng'iroq tugatildi.");
               }
-            }, 12000);
+            }, 25000);
+          }
+        } else if (state === "disconnected") {
+          toast("Aloqa vaqtincha uzildi. Qayta ulanmoqda...");
+          pushCallEvent("restartIce() — disconnected", "warn");
+          void triggerIceRestart();
+          if (!callDisconnectedTimerRef.current) {
+            callDisconnectedTimerRef.current = window.setTimeout(() => {
+              callDisconnectedTimerRef.current = null;
+              if (callStatusRef.current !== "idle") {
+                stopCall(false);
+                toast.error("Aloqa tiklanmadi (25s kutildi). Qo'ng'iroq tugatildi.");
+              }
+            }, 25000);
           }
         } else if (state === "connected" || state === "completed") {
           if (callDisconnectedTimerRef.current) {
@@ -6161,29 +6512,26 @@ function App() {
               ? "err"
               : "info",
         );
-        if (peer.connectionState === "failed") {
+        if (peer.connectionState === "failed" || peer.connectionState === "disconnected") {
           console.warn(
-            "[WebRTC] connectionState=failed → attempting ICE restart",
+            `[WebRTC] connectionState=${peer.connectionState} → attempting ICE restart`,
           );
-          toast("Aloqa qayta ulanmoqda...");
-          try {
-            peer.restartIce();
-          } catch (e) {
-            console.warn("[WebRTC] restartIce error:", e);
-          }
-          // Don't auto-end: rely on disconnected timer to end if restart fails
+          toast("Aloqa uzildi. Qayta ulanish kutilmoqda...");
+          void triggerIceRestart();
           if (!callDisconnectedTimerRef.current) {
             callDisconnectedTimerRef.current = window.setTimeout(() => {
               callDisconnectedTimerRef.current = null;
               if (
                 callStatusRef.current !== "idle" &&
                 (peer.connectionState === "failed" ||
-                  peer.iceConnectionState === "failed")
+                  peer.connectionState === "disconnected" ||
+                  peer.iceConnectionState === "failed" ||
+                  peer.iceConnectionState === "disconnected")
               ) {
                 stopCall(false);
-                toast.error("Aloqa tiklanmadi. Call tugatildi.");
+                toast.error("Aloqa tiklanmadi (25s kutildi). Qo'ng'iroq tugatildi.");
               }
-            }, 20000);
+            }, 25000);
           }
         }
       };
@@ -6526,6 +6874,8 @@ function App() {
 
   // ── Auto-resume call after restart/update ──
   // If we were in a call within the last ACTIVE_CALL_RESUME_WINDOW_MS,
+  // ── Auto-resume active call on restart/update ──
+  // If the app was closed (or restarted for update) while in a call,
   // automatically re-dial the same peer once socket is connected.
   useEffect(() => {
     if (!isSocketConnected) return;
@@ -6538,20 +6888,18 @@ function App() {
       clearActiveCallState();
       return;
     }
-    if (saved.type !== "direct" || !saved.peerId) {
-      // Group resume not implemented yet — skip
-      clearActiveCallState();
-      return;
-    }
     autoResumeAttemptedRef.current = true;
+    clearActiveCallState();
+
     // Small delay so socket auth + handlers fully attached
     window.setTimeout(() => {
       if (callStatusRef.current !== "idle") return;
-      toast("Qo'ng'iroqni qayta ulayapman...");
-      startCallRef.current?.(saved.peerId).catch((err) => {
-        console.warn("[Call] auto-resume failed:", err);
-        clearActiveCallState();
-      });
+      toast.success("Ilova yangilandi! Qo'ng'iroq qayta ulanmoqda...");
+      if (saved.type === "direct" && saved.peerId) {
+        startCallRef.current?.(saved.peerId).catch((err) => {
+          console.warn("[Call] auto-resume failed:", err);
+        });
+      }
     }, 1500);
   }, [isSocketConnected]);
 
@@ -6716,6 +7064,7 @@ function App() {
         });
 
         socketRef.current.emit("group:call:join", { groupId });
+        requestGroupCallStatus(groupId);
         setGroupCallParticipants((prev) => {
           const next = [...prev];
           const ensure = (uid: string) => {
@@ -6811,10 +7160,16 @@ function App() {
       toast.error(`Accept fail: ${stage}`.slice(0, 200));
       try {
         if (incomingCall && socketRef.current) {
-          socketRef.current.emit("call:end", {
-            recipientId: incomingCall.fromUserId,
-            reason: `accept-error: ${stage}`.slice(0, 120),
-          });
+          if (callGroupIdRef.current) {
+            socketRef.current.emit("group:call:leave", {
+              groupId: callGroupIdRef.current,
+            });
+          } else {
+            socketRef.current.emit("call:end", {
+              recipientId: incomingCall.fromUserId,
+              reason: `accept-error: ${stage}`.slice(0, 120),
+            });
+          }
         }
       } catch {}
       stopCall(true);
@@ -6823,10 +7178,16 @@ function App() {
 
   const declineCall = () => {
     if (incomingCall && socketRef.current) {
-      socketRef.current.emit("call:end", {
-        recipientId: incomingCall.fromUserId,
-        reason: "declined",
-      });
+      if (callGroupIdRef.current) {
+        socketRef.current.emit("group:call:leave", {
+          groupId: callGroupIdRef.current,
+        });
+      } else {
+        socketRef.current.emit("call:end", {
+          recipientId: incomingCall.fromUserId,
+          reason: "declined",
+        });
+      }
     }
     void clearMobileCallNotification();
     stopCall(true);
@@ -7267,428 +7628,97 @@ function App() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  const handleConfirmDelete = async (forEveryone: boolean) => {
+    if (!deleteModalState || deleteModalState.messageIds.length === 0) return;
+    const { messageIds, isGroup } = deleteModalState;
+    try {
+      if (isGroup) {
+        for (const id of messageIds) {
+          await api
+            .delete(`/groups/${selectedGroupId}/messages/${id}`)
+            .catch(() => {});
+        }
+        setGroupMessages((prev) =>
+          prev.filter((m) => !messageIds.includes(m.id)),
+        );
+        toast.success("O'chirildi");
+      } else {
+        await api.delete("/messages", {
+          data: { messageIds, forEveryone },
+        });
+        setMessages((prev) => prev.filter((m) => !messageIds.includes(m.id)));
+        toast.success(
+          forEveryone
+            ? "Xabar barchadan o'chirildi"
+            : "Xabar faqat sizdan o'chirildi",
+        );
+      }
+    } catch (err) {
+      toast.error(readAxiosMessage(err, "O'chirishda xatolik"));
+    } finally {
+      setSelectedMessageIds(new Set());
+      setIsSelectionMode(false);
+      setDeleteModalState(null);
+    }
+  };
+
   // ── APP LOCK SCREEN ──
   if (appLocked && appLockEnabled) {
     return (
-      <div className="layout dark">
-        <div className="auth-page" style={{ gridColumn: "1 / -1" }}>
-          <div
-            className="auth-card"
-            onClick={() => lockPasscodeInputRef.current?.focus()}
-          >
-            <div className="auth-logo">🔒</div>
-            <h1>App Locked</h1>
-            <p>Enter passcode to continue</p>
-            <form
-              className="form"
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleUnlock();
-              }}
-            >
-              <input
-                ref={lockPasscodeInputRef}
-                type="password"
-                placeholder="Enter passcode"
-                value={lockPasscodeInput}
-                onChange={(e) =>
-                  setLockPasscodeInput(
-                    sanitizeUnlockInput(e.target.value, unlockKeyboardMode),
-                  )
-                }
-                inputMode={
-                  unlockKeyboardMode === "numeric" ? "numeric" : "text"
-                }
-                pattern={
-                  unlockKeyboardMode === "numeric" ? "[0-9]*" : undefined
-                }
-                maxLength={PASSCODE_MAX_LENGTH}
-                autoFocus
-                required
-              />
-              <button
-                className="btn-link"
-                type="button"
-                onClick={() =>
-                  setUnlockKeyboardMode((prev) =>
-                    prev === "numeric" ? "text" : "numeric",
-                  )
-                }
-              >
-                {unlockKeyboardMode === "numeric"
-                  ? "Old passcode (harf) uchun ABC keyboard"
-                  : "Raqamli keyboardga qaytish (123)"}
-              </button>
-              <button className="btn-primary" type="submit">
-                Unlock
-              </button>
-            </form>
-          </div>
-        </div>
-        {/* Update dialog on lock screen */}
-        {updateAvailable && (
-          <div
-            className="lightbox-overlay"
-            onClick={() => setUpdateAvailable(null)}
-          >
-            <div
-              className="create-group-dialog update-dialog"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="update-dialog-header">
-                <span className="update-dialog-icon">🔄</span>
-                <h3>New version available!</h3>
-                <p>
-                  Version <strong>{updateAvailable.newVersion}</strong> is ready
-                  to download
-                </p>
-                {updateAvailable.notes && (
-                  <p className="update-dialog-notes">{updateAvailable.notes}</p>
-                )}
-              </div>
-              <div className="update-dialog-actions">
-                <button
-                  className="btn-primary update-dialog-primary-btn"
-                  disabled={isUpdating}
-                  onClick={() => {
-                    void handleUpdateInstall(updateAvailable.newVersion);
-                  }}
-                >
-                  {isUpdating ? "Downloading..." : updateActionLabel}
-                </button>
-                <div className="update-progress-panel">
-                  <div className="update-progress-head">
-                    <span>Download progress</span>
-                    <strong>{updateProgress}%</strong>
-                  </div>
-                  <div className="update-progress-track" aria-hidden="true">
-                    <div
-                      className="update-progress-fill"
-                      style={{
-                        width: `${updateProgress}%`,
-                        animation: isUpdating
-                          ? "update-flow 1.15s linear infinite"
-                          : "none",
-                      }}
-                    />
-                  </div>
-                  <div className="update-progress-foot">
-                    <span>0%</span>
-                    <span>{updateSpeedLabel || "Waiting..."}</span>
-                    <span>100%</span>
-                  </div>
-                </div>
-                <button
-                  className="update-dialog-secondary-btn"
-                  onClick={() => setUpdateAvailable(null)}
-                  disabled={isUpdating}
-                >
-                  Later
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
+      <AppLockScreen
+        lockPasscodeInputRef={lockPasscodeInputRef}
+        lockPasscodeInput={lockPasscodeInput}
+        setLockPasscodeInput={setLockPasscodeInput}
+        unlockKeyboardMode={unlockKeyboardMode}
+        setUnlockKeyboardMode={setUnlockKeyboardMode}
+        handleUnlock={handleUnlock}
+        sanitizeUnlockInput={sanitizeUnlockInput}
+        passcodeMaxLength={PASSCODE_MAX_LENGTH}
+        updateModalProps={
+          updateAvailable
+            ? {
+                updateAvailable,
+                onClose: () => setUpdateAvailable(null),
+                onInstall: handleUpdateInstall,
+                isUpdating,
+                updateActionLabel,
+                updateProgress,
+                updateSpeedLabel,
+              }
+            : undefined
+        }
+      />
     );
   }
 
   if (!token || !currentUser) {
-    if (token && (isSessionBootstrapping || sessionBootstrapError)) {
-      return (
-        <div className="auth-page">
-          <div className="auth-card">
-            <div className="session-loader-mark" aria-hidden="true">
-              <div className="session-loader-ring" />
-              <div className="session-loader-core">CD</div>
-            </div>
-            <h1>Session tiklanmoqda</h1>
-            <p>
-              {isSessionBootstrapping
-                ? "Avvalgi login ma'lumotlari tekshirilmoqda..."
-                : sessionBootstrapError}
-            </p>
-            {!isSessionBootstrapping && (
-              <button
-                className="btn-primary"
-                type="button"
-                onClick={() => setSessionBootstrapNonce((prev) => prev + 1)}
-              >
-                Qayta urinish
-              </button>
-            )}
-          </div>
-        </div>
-      );
-    }
-
     return (
-      <div className="auth-page">
-        <div className="auth-card">
-          <div className="auth-logo">💬</div>
-          <h1>Chat Desktop</h1>
-          <p>Secure real-time messaging</p>
-
-          {authStep === "login" && (
-            <form className="form" onSubmit={handleLogin}>
-              <input
-                type="email"
-                placeholder="Email address"
-                value={loginEmail}
-                onChange={(event) => setLoginEmail(event.target.value)}
-                required
-              />
-              <input
-                type="password"
-                placeholder="Password"
-                value={loginPassword}
-                onChange={(event) => setLoginPassword(event.target.value)}
-                required
-              />
-              <button
-                className="btn-primary"
-                disabled={isSubmittingAuth}
-                type="submit"
-              >
-                Sign In
-              </button>
-              <button
-                disabled={isSubmittingAuth}
-                type="button"
-                onClick={() => setAuthStep("register")}
-              >
-                Create Account
-              </button>
-              <button
-                className="btn-link"
-                disabled={isSubmittingAuth}
-                type="button"
-                onClick={() => setAuthStep("forgot")}
-              >
-                Forgot password?
-              </button>
-              <div className="auth-divider">
-                <span>or</span>
-              </div>
-              <button
-                type="button"
-                className="google-desktop-btn"
-                onClick={startGoogleLogin}
-                disabled={googleAuthLoading}
-              >
-                {googleAuthLoading
-                  ? "⏳ Browserda kiring..."
-                  : "🔵 Google bilan kirish"}
-              </button>
-            </form>
-          )}
-
-          {authStep === "register" && (
-            <form className="form" onSubmit={handleRegister}>
-              <input
-                type="text"
-                placeholder="Display name"
-                value={registerDisplayName}
-                onChange={(event) => setRegisterDisplayName(event.target.value)}
-                required
-              />
-              <input
-                type="email"
-                placeholder="Email address"
-                value={registerEmail}
-                onChange={(event) => setRegisterEmail(event.target.value)}
-                required
-              />
-              <input
-                type="password"
-                placeholder="Password"
-                value={registerPassword}
-                onChange={(event) => setRegisterPassword(event.target.value)}
-                required
-              />
-              <button
-                className="btn-primary"
-                disabled={isSubmittingAuth}
-                type="submit"
-              >
-                Sign Up
-              </button>
-              <button
-                className="btn-link"
-                disabled={isSubmittingAuth}
-                type="button"
-                onClick={() => setAuthStep("login")}
-              >
-                ← Back to Sign In
-              </button>
-            </form>
-          )}
-
-          {authStep === "verify" && (
-            <form className="form" onSubmit={handleVerifyEmail}>
-              <input
-                type="email"
-                placeholder="Email address"
-                value={verifyEmail}
-                onChange={(event) => setVerifyEmail(event.target.value)}
-                required
-              />
-              <input
-                type="text"
-                placeholder="6-digit verification code"
-                value={verifyCode}
-                onChange={(event) => setVerifyCode(event.target.value)}
-                required
-              />
-              <button
-                className="btn-primary"
-                disabled={isSubmittingAuth}
-                type="submit"
-              >
-                Verify & Sign In
-              </button>
-              <button
-                className="btn-link"
-                disabled={isSubmittingAuth}
-                type="button"
-                onClick={() => setAuthStep("login")}
-              >
-                ← Back to Sign In
-              </button>
-            </form>
-          )}
-
-          {authStep === "login2fa" && (
-            <form className="form" onSubmit={handle2FALogin}>
-              <input
-                type="text"
-                placeholder="Authenticator code"
-                value={twoFALoginCode}
-                onChange={(event) => setTwoFALoginCode(event.target.value)}
-                required
-              />
-              <button
-                className="btn-primary"
-                disabled={isSubmittingAuth}
-                type="submit"
-              >
-                Verify 2FA
-              </button>
-              <button
-                className="btn-link"
-                disabled={isSubmittingAuth}
-                type="button"
-                onClick={() => {
-                  setAuthStep("login");
-                  setTempTwoFAToken("");
-                }}
-              >
-                ← Back
-              </button>
-            </form>
-          )}
-
-          {authStep === "forgot" && (
-            <form className="form" onSubmit={handleForgotPassword}>
-              <input
-                type="email"
-                placeholder="Email address"
-                value={forgotEmail}
-                onChange={(event) => setForgotEmail(event.target.value)}
-                required
-              />
-              <button
-                className="btn-primary"
-                disabled={isSubmittingAuth}
-                type="submit"
-              >
-                Send Reset Code
-              </button>
-              <button
-                className="btn-link"
-                disabled={isSubmittingAuth}
-                type="button"
-                onClick={() => setAuthStep("login")}
-              >
-                ← Back to Sign In
-              </button>
-            </form>
-          )}
-
-          {authStep === "reset" && (
-            <form className="form" onSubmit={handleResetPassword}>
-              <input
-                type="email"
-                placeholder="Email address"
-                value={verifyEmail}
-                onChange={(event) => setVerifyEmail(event.target.value)}
-                required
-              />
-              <input
-                type="text"
-                placeholder="Reset code"
-                value={resetCode}
-                onChange={(event) => setResetCode(event.target.value)}
-                required
-              />
-              <input
-                type="password"
-                placeholder="New password"
-                value={resetPassword}
-                onChange={(event) => setResetPassword(event.target.value)}
-                required
-              />
-              <button
-                className="btn-primary"
-                disabled={isSubmittingAuth}
-                type="submit"
-              >
-                Reset Password
-              </button>
-              <button
-                className="btn-link"
-                disabled={isSubmittingAuth}
-                type="button"
-                onClick={() => setAuthStep("login")}
-              >
-                ← Back to Sign In
-              </button>
-            </form>
-          )}
-
-          {/* Login Page Update Check */}
-          {(isWails || isNativeMobileRuntime) && (
-            <div style={{ marginTop: 20, textAlign: "center", borderTop: "1px solid var(--border)", paddingTop: 15 }}>
-              <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 8 }}>
-                Version: <strong>v{appVersion}</strong>
-              </div>
-              <button
-                className="btn-link"
-                type="button"
-                disabled={isSubmittingAuth}
-                onClick={async () => {
-                  try {
-                    const result: any = await CheckForUpdate();
-                    void loadUpdateHistory();
-                    if (result?.available) {
-                      setUpdateAvailable({
-                        newVersion: result.newVersion,
-                        notes: result.notes || "",
-                      });
-                    } else {
-                      toast.success("Eng so'nggi versiyadasiz!");
-                    }
-                  } catch {
-                    toast.error("Yangilanishni tekshirib bo'lmadi");
-                  }
-                }}
-              >
-                Check for updates
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
+      <AuthScreen
+        token={token}
+        isSessionBootstrapping={isSessionBootstrapping}
+        sessionBootstrapError={sessionBootstrapError}
+        onRetryBootstrap={() => setSessionBootstrapNonce((prev) => prev + 1)}
+        onAuthSuccess={applySession}
+        startGoogleLogin={startGoogleLogin}
+        googleAuthLoading={googleAuthLoading}
+        appVersion={appVersion}
+        onCheckForUpdate={async () => {
+          try {
+            const result: any = await CheckForUpdate();
+            void loadUpdateHistory();
+            if (result?.available) {
+              setUpdateAvailable({
+                newVersion: result.newVersion,
+                notes: result.notes || "",
+              });
+            } else {
+              toast.success("Eng so'nggi versiyadasiz!");
+            }
+          } catch {
+            toast.error("Yangilanishni tekshirib bo'lmadi");
+          }
+        }}
+      />
     );
   }
 
@@ -7728,1951 +7758,145 @@ function App() {
         )}
 
       {/* ── BURGER MENU OVERLAY (Settings/Night Mode/etc) ── */}
-      {leftOpen && (
-        <div className="sidebar-overlay" onClick={() => setLeftOpen(false)} />
-      )}
-      <aside className={`left-panel${leftOpen ? " open" : ""}`}>
-        <div
-          className="profile-card clickable"
-          onClick={() => {
-            setLeftOpen(false);
-            setShowMyProfile(true);
-            setEditDisplayName(currentUser.displayName);
-            setEditUsername(currentUser.username ?? "");
-            setEditStatusText(currentUser.statusText ?? "");
-            setEditStatusEmoji(currentUser.statusEmoji ?? "");
-          }}
-        >
-          {hasUsableAvatar(currentUser.avatarUrl) &&
-          !brokenAvatarIds[currentUser.id] ? (
-            <img
-              src={`${API_URL}${currentUser.avatarUrl}`}
-              alt="Avatar"
-              className="profile-avatar-img"
-              onError={() =>
-                setBrokenAvatarIds((prev) => ({
-                  ...prev,
-                  [currentUser.id]: true,
-                }))
-              }
-            />
-          ) : (
-            <div className="profile-avatar">
-              {getInitialLetter(currentUser.displayName)}
-            </div>
-          )}
-          <div className="profile-info">
-            <strong>{currentUser.displayName}</strong>
-            <small>
-              {currentUser.statusEmoji || currentUser.statusText
-                ? `${currentUser.statusEmoji ?? ""} ${currentUser.statusText ?? ""}`.trim()
-                : currentUser.username
-                  ? `@${currentUser.username}`
-                  : currentUser.email}
-            </small>
-          </div>
-        </div>
-
-        <div className="sidebar-menu">
-          <button
-            className="sidebar-menu-item"
-            onClick={() => {
-              setShowCreateGroup(true);
-              setLeftOpen(false);
-            }}
-          >
-            ➕ Create Group
-          </button>
-          <button
-            className="sidebar-menu-item"
-            onClick={() => {
-              setChatMode("user");
-              setSelectedUserId(currentUser.id);
-              setSelectedGroupId("");
-              setIsSelectionMode(false);
-              setSelectedMessageIds(new Set());
-              if (isMobileViewport) setIsMobileChatOpen(true);
-              setLeftOpen(false);
-            }}
-          >
-            🔖 Saved Messages
-          </button>
-          <button
-            className="sidebar-menu-item"
-            onClick={() => {
-              setShowSettings(true);
-              setLeftOpen(false);
-            }}
-          >
-            ⚙️ Settings
-          </button>
-          <button
-            className="sidebar-menu-item"
-            onClick={() => {
-              if (appLockEnabled) {
-                setAppLocked(true);
-                setLeftOpen(false);
-              } else {
-                toast("Set a passcode in settings first.");
-              }
-            }}
-          >
-            🔒 Lock
-          </button>
-          <button className="sidebar-menu-item" onClick={clearSession}>
-            🚪 Logout
-          </button>
-        </div>
-
-        <div className="sidebar-bottom">
-          <div className="theme-toggle-row">
-            <span className="theme-toggle-label">
-              Current version: v{appVersion}
-            </span>
-          </div>
-        </div>
-      </aside>
+      <BurgerMenu
+        isOpen={leftOpen}
+        onClose={() => setLeftOpen(false)}
+        currentUser={currentUser}
+        brokenAvatarIds={brokenAvatarIds}
+        setBrokenAvatarIds={setBrokenAvatarIds}
+        onOpenMyProfile={() => setShowMyProfile(true)}
+        onOpenCreateGroup={() => setShowCreateGroup(true)}
+        onOpenSavedMessages={() => {
+          setChatMode("user");
+          setSelectedUserId(currentUser?.id || "");
+          setSelectedGroupId("");
+          setIsSelectionMode(false);
+          setSelectedMessageIds(new Set());
+          if (isMobileViewport) setIsMobileChatOpen(true);
+        }}
+        onOpenSettings={() => setShowSettings(true)}
+        appLockEnabled={appLockEnabled}
+        onLockApp={() => setAppLocked(true)}
+        onLogout={clearSession}
+        appVersion={appVersion}
+      />
 
       {/* ── SETTINGS MODAL ── */}
-      {showSettings && (
-        <div
-          className="lightbox-overlay"
-          onClick={() => {
-            setShowSettings(false);
-            setProxyLoaded(false);
-          }}
-        >
-          <div
-            className="settings-dialog"
-            onClick={(e) => e.stopPropagation()}
-            ref={(el) => {
-              if (el && !proxyLoaded && isWails) {
-                setProxyLoaded(true);
-                GetProxyConfig()
-                  .then((cfg: any) => {
-                    setProxyEnabled(!!cfg.enabled);
-                    setProxyType(cfg.type || "socks5");
-                    setProxyHost(cfg.host || "");
-                    setProxyPort(cfg.port || "");
-                  })
-                  .catch(() => {});
-                GetToastPosition()
-                  .then((pos) => {
-                    const raw = (pos || "bottom-right") as
-                      | "top-left"
-                      | "top-right"
-                      | "bottom-left"
-                      | "bottom-right";
-                    const p =
-                      raw === "top-left"
-                        ? "bottom-left"
-                        : raw === "top-right"
-                          ? "bottom-right"
-                          : raw;
-                    setToastPositionState(p);
-                  })
-                  .catch(() => {});
-              }
-            }}
-          >
-            <div className="settings-header">
-              <h3>⚙️ Settings</h3>
-              <button
-                className="settings-close"
-                onClick={() => {
-                  setShowSettings(false);
-                  setProxyLoaded(false);
-                }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="settings-tabs">
-              <button
-                className={`settings-tab-btn${settingsCategory === "general" ? " active" : ""}`}
-                onClick={() => setSettingsCategory("general")}
-                type="button"
-              >
-                General
-              </button>
-              <button
-                className={`settings-tab-btn${settingsCategory === "design" ? " active" : ""}`}
-                onClick={() => setSettingsCategory("design")}
-                type="button"
-              >
-                Design
-              </button>
-              <button
-                className={`settings-tab-btn${settingsCategory === "call" ? " active" : ""}`}
-                onClick={() => setSettingsCategory("call")}
-                type="button"
-              >
-                Call
-              </button>
-              <button
-                className={`settings-tab-btn${settingsCategory === "security" ? " active" : ""}`}
-                onClick={() => setSettingsCategory("security")}
-                type="button"
-              >
-                Security
-              </button>
-              {developerUnlocked && (
-                <button
-                  className={`settings-tab-btn${settingsCategory === "developer" ? " active" : ""}`}
-                  onClick={() => setSettingsCategory("developer")}
-                  type="button"
-                >
-                  Developer
-                </button>
-              )}
-            </div>
-
-            <div className="settings-section">
-              {settingsCategory === "general" && (
-                <>
-                  {/* Startup on Windows */}
-                  {isWails && (
-                    <div className="settings-row">
-                      <span>🖥️ Launch at startup</span>
-                      <label className="toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={startupEnabled}
-                          onChange={toggleStartup}
-                        />
-                        <span className="toggle-slider" />
-                      </label>
-                    </div>
-                  )}
-
-                  {isWails && (
-                    <div className="settings-row">
-                      <span>🪟 Start minimized to tray</span>
-                      <label className="toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={launchMinimizedOnStartup}
-                          onChange={() => {
-                            void toggleLaunchMinimizedOnStartup();
-                          }}
-                        />
-                        <span className="toggle-slider" />
-                      </label>
-                    </div>
-                  )}
-
-                  {/* Close to tray / Pin to taskbar */}
-                  {isWails && (
-                    <div className="settings-row">
-                      <span>📌 Close to tray</span>
-                      <label className="toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={closeToTray}
-                          onChange={async () => {
-                            const next = !closeToTray;
-                            setCloseToTray(next);
-                            localStorage.setItem("close_to_tray", String(next));
-                            await SetCloseToTray(next);
-                            toast.success(
-                              next
-                                ? "Close to tray enabled"
-                                : "App will fully close",
-                            );
-                          }}
-                        />
-                        <span className="toggle-slider" />
-                      </label>
-                    </div>
-                  )}
-
-                  {isWails && (
-                    <div className="settings-row">
-                      <span>🔔 Notification corner</span>
-                      <select
-                        value={toastPosition}
-                        onChange={async (e) => {
-                          const next = e.target.value as
-                            | "bottom-left"
-                            | "bottom-right";
-                          setToastPositionState(next);
-                          const ok = await SetToastPosition(next);
-                          if (ok) {
-                            toast.success("Notification corner saved");
-                          } else {
-                            toast.error("Could not save corner");
-                          }
-                        }}
-                        style={{
-                          padding: "6px 12px",
-                          borderRadius: 8,
-                          border: "1px solid var(--line)",
-                          background: "var(--panel-hover)",
-                          color: "var(--text)",
-                          fontSize: 13,
-                        }}
-                      >
-                        <option value="bottom-left">Bottom left</option>
-                        <option value="bottom-right">Bottom right</option>
-                      </select>
-                    </div>
-                  )}
-
-                  {/* Smooth Caret Animation */}
-                  <div className="settings-row">
-                    <span>✨ Smooth caret animation</span>
-                    <label className="toggle-switch">
-                      <input
-                        type="checkbox"
-                        checked={smoothCaret}
-                        onChange={() => {
-                          const next = !smoothCaret;
-                          setSmoothCaret(next);
-                          localStorage.setItem("smooth_caret", String(next));
-                        }}
-                      />
-                      <span className="toggle-slider" />
-                    </label>
-                  </div>
-
-                  {/* Cursor Blinking */}
-                  <div className="settings-row">
-                    <span>💫 Cursor blinking (phase)</span>
-                    <label className="toggle-switch">
-                      <input
-                        type="checkbox"
-                        checked={cursorBlink}
-                        onChange={() => {
-                          const next = !cursorBlink;
-                          setCursorBlink(next);
-                          localStorage.setItem("cursor_blink", String(next));
-                        }}
-                      />
-                      <span className="toggle-slider" />
-                    </label>
-                  </div>
-
-                  {/* Send Sound */}
-                  <div className="settings-row">
-                    <span>🔊 Message send sound</span>
-                    <label className="toggle-switch">
-                      <input
-                        type="checkbox"
-                        checked={sendSound}
-                        onChange={() => {
-                          const next = !sendSound;
-                          setSendSound(next);
-                          localStorage.setItem("send_sound", String(next));
-                        }}
-                      />
-                      <span className="toggle-slider" />
-                    </label>
-                  </div>
-                </>
-              )}
-
-              {settingsCategory === "call" && (
-                <>
-                  <div
-                    className="settings-row"
-                    style={{
-                      alignItems: "flex-start",
-                      flexDirection: "column",
-                      gap: 10,
-                    }}
-                  >
-                    <span>🎵 Incoming call ringtone</span>
-                    <small
-                      style={{
-                        color: "var(--text)",
-                        opacity: 0.72,
-                        lineHeight: 1.5,
-                      }}
-                    >
-                      Server ringtone: {ringtoneLabel || "Server ringtone"}
-                    </small>
-                    <small
-                      style={{
-                        color: "var(--text)",
-                        opacity: 0.72,
-                        lineHeight: 1.5,
-                      }}
-                    >
-                      Active source:{" "}
-                      {ringtoneUrl === DEFAULT_RINGTONE_URL
-                        ? "server default"
-                        : ringtoneUrl}
-                    </small>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      <button
-                        className="settings-btn primary"
-                        type="button"
-                        onClick={() => {
-                          void useServerRingtone();
-                        }}
-                        disabled={ringtoneUploading}
-                      >
-                        ⬇️ Download server ringtone
-                      </button>
-                      <button
-                        className="settings-btn"
-                        type="button"
-                        onClick={() => ringtoneFileInputRef.current?.click()}
-                        disabled={ringtoneUploading}
-                      >
-                        {ringtoneUploading
-                          ? "⏳ Uploading..."
-                          : "⬆️ Upload own ringtone"}
-                      </button>
-                      <button
-                        className="settings-btn"
-                        type="button"
-                        onClick={previewRingtone}
-                      >
-                        ▶️ Preview
-                      </button>
-                      <button
-                        className="settings-btn danger"
-                        type="button"
-                        onClick={resetCustomRingtone}
-                      >
-                        ♻️ Reset
-                      </button>
-                    </div>
-                    <input
-                      ref={ringtoneFileInputRef}
-                      type="file"
-                      accept="audio/*"
-                      style={{ display: "none" }}
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        e.target.value = "";
-                        if (!file) return;
-                        await handleRingtoneUpload(file);
-                      }}
-                    />
-                  </div>
-
-                  <div
-                    className="settings-row"
-                    style={{
-                      alignItems: "flex-start",
-                      flexDirection: "column",
-                      gap: 10,
-                    }}
-                  >
-                    <span>📞 Outgoing call tone</span>
-                    <small
-                      style={{
-                        color: "var(--text)",
-                        opacity: 0.72,
-                        lineHeight: 1.5,
-                      }}
-                    >
-                      Active source:{" "}
-                      {dialToneUrl
-                        ? dialToneLabel || dialToneUrl
-                        : "Default dial tone"}
-                    </small>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      <button
-                        className="settings-btn"
-                        type="button"
-                        onClick={() => dialToneFileInputRef.current?.click()}
-                        disabled={dialToneUploading}
-                      >
-                        {dialToneUploading
-                          ? "⏳ Uploading..."
-                          : "⬆️ Upload own outgoing tone"}
-                      </button>
-                      <button
-                        className="settings-btn"
-                        type="button"
-                        onClick={previewDialTone}
-                      >
-                        ▶️ Preview
-                      </button>
-                      <button
-                        className="settings-btn danger"
-                        type="button"
-                        onClick={resetCustomDialTone}
-                      >
-                        ♻️ Reset
-                      </button>
-                    </div>
-                    <input
-                      ref={dialToneFileInputRef}
-                      type="file"
-                      accept="audio/*"
-                      style={{ display: "none" }}
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        e.target.value = "";
-                        if (!file) return;
-                        await handleDialToneUpload(file);
-                      }}
-                    />
-                  </div>
-                </>
-              )}
-
-              {settingsCategory === "design" && (
-                <>
-                  <div
-                    className="settings-row"
-                    style={{
-                      alignItems: "flex-start",
-                      flexDirection: "column",
-                      gap: 12,
-                    }}
-                  >
-                    <span>🎨 Theme designer (real-time)</span>
-
-                    <div className="settings-color-group">
-                      <span className="settings-color-label">
-                        Accent / Circle colors
-                      </span>
-                      <div className="settings-color-swatches">
-                        {ACCENT_COLOR_PRESETS.map((color) => (
-                          <button
-                            key={`accent-${color}`}
-                            type="button"
-                            className={`settings-color-swatch${themeAccentColor === color ? " active" : ""}`}
-                            style={{ background: color }}
-                            onClick={() => setThemeAccentColor(color)}
-                            aria-label={`Accent ${color}`}
-                          />
-                        ))}
-                      </div>
-                      <label className="settings-color-picker-wrap">
-                        <span>Custom accent</span>
-                        <input
-                          type="color"
-                          value={themeAccentColor}
-                          onChange={(e) =>
-                            setThemeAccentColor(
-                              normalizeHexColor(e.target.value, "#0e7c66"),
-                            )
-                          }
-                        />
-                      </label>
-                    </div>
-
-                    <div className="settings-color-group">
-                      <span className="settings-color-label">
-                        Layout color (panels)
-                      </span>
-                      <div className="settings-color-swatches">
-                        {LAYOUT_COLOR_PRESETS.map((color) => (
-                          <button
-                            key={`layout-${color}`}
-                            type="button"
-                            className={`settings-color-swatch${themeLayoutColor === color ? " active" : ""}`}
-                            style={{ background: color }}
-                            onClick={() => setThemeLayoutColor(color)}
-                            aria-label={`Layout ${color}`}
-                          />
-                        ))}
-                      </div>
-                      <label className="settings-color-picker-wrap">
-                        <span>Custom layout</span>
-                        <input
-                          type="color"
-                          value={themeLayoutColor}
-                          onChange={(e) =>
-                            setThemeLayoutColor(
-                              normalizeHexColor(e.target.value, "#1e2c3a"),
-                            )
-                          }
-                        />
-                      </label>
-                    </div>
-
-                    <div className="settings-color-inline-pickers">
-                      <label className="settings-color-picker-wrap">
-                        <span>Text color</span>
-                        <div className="settings-color-swatches compact">
-                          {TEXT_COLOR_PRESETS.map((color) => (
-                            <button
-                              key={`text-${color}`}
-                              type="button"
-                              className={`settings-color-swatch${themeTextColor === color ? " active" : ""}`}
-                              style={{ background: color }}
-                              onClick={() => setThemeTextColor(color)}
-                              aria-label={`Text ${color}`}
-                            />
-                          ))}
-                        </div>
-                        <input
-                          type="color"
-                          value={themeTextColor}
-                          onChange={(e) =>
-                            setThemeTextColor(
-                              normalizeHexColor(e.target.value, "#e1e8ef"),
-                            )
-                          }
-                        />
-                      </label>
-
-                      <label className="settings-color-picker-wrap">
-                        <span>Main background</span>
-                        <input
-                          type="color"
-                          value={themeBackgroundColor}
-                          onChange={(e) =>
-                            setThemeBackgroundColor(
-                              normalizeHexColor(e.target.value, "#17212b"),
-                            )
-                          }
-                        />
-                      </label>
-
-                      <label className="settings-color-picker-wrap">
-                        <span>Search/message input</span>
-                        <input
-                          type="color"
-                          value={themeInputColor}
-                          onChange={(e) =>
-                            setThemeInputColor(
-                              normalizeHexColor(e.target.value, "#17212b"),
-                            )
-                          }
-                        />
-                      </label>
-                    </div>
-
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      <button
-                        className="settings-btn"
-                        type="button"
-                        onClick={() => {
-                          setThemeAccentColor("#0e7c66");
-                          setThemeLayoutColor("#1e2c3a");
-                          setThemeTextColor("#e1e8ef");
-                          setThemeBackgroundColor("#17212b");
-                          setThemeInputColor("#17212b");
-                          toast.success(
-                            "Theme ranglari default holatga qaytdi",
-                          );
-                        }}
-                      >
-                        Reset theme colors
-                      </button>
-                      <input
-                        type="text"
-                        className="theme-profile-name-input"
-                        placeholder="Profile name (masalan: Night Ocean)"
-                        value={themeProfileName}
-                        onChange={(e) =>
-                          setThemeProfileName(e.target.value.slice(0, 60))
-                        }
-                      />
-                      <button
-                        className="settings-btn primary"
-                        type="button"
-                        onClick={saveCurrentThemeProfileLocally}
-                      >
-                        Save local
-                      </button>
-                      <button
-                        className="settings-btn"
-                        type="button"
-                        onClick={exportThemeProfilesToFile}
-                      >
-                        Export JSON
-                      </button>
-                      <button
-                        className="settings-btn"
-                        type="button"
-                        onClick={() =>
-                          themeProfileImportInputRef.current?.click()
-                        }
-                      >
-                        Import JSON
-                      </button>
-                      <button
-                        className="settings-btn primary"
-                        type="button"
-                        onClick={shareCurrentThemeProfile}
-                        disabled={themeProfilesSharing}
-                      >
-                        {themeProfilesSharing
-                          ? "Sharing..."
-                          : "Share community"}
-                      </button>
-                    </div>
-
-                    <input
-                      ref={themeProfileImportInputRef}
-                      type="file"
-                      accept="application/json,.json"
-                      style={{ display: "none" }}
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        await importThemeProfilesFromFile(file);
-                        e.currentTarget.value = "";
-                      }}
-                    />
-
-                    {localThemeProfiles.length > 0 && (
-                      <div className="theme-profile-list-wrap">
-                        <span className="settings-color-label">
-                          Saved local profiles ({localThemeProfiles.length})
-                        </span>
-                        <div className="theme-profile-list">
-                          {localThemeProfiles.slice(0, 20).map((profile) => (
-                            <div
-                              className="theme-profile-card"
-                              key={profile.id}
-                            >
-                              <div className="theme-profile-main">
-                                <strong>{profile.name}</strong>
-                                <small>
-                                  {new Date(profile.createdAt).toLocaleString()}
-                                </small>
-                                <div className="theme-profile-swatches">
-                                  {Object.values(profile.palette).map(
-                                    (color, idx) => (
-                                      <span
-                                        key={`${profile.id}-${idx}`}
-                                        style={{ background: color }}
-                                      />
-                                    ),
-                                  )}
-                                </div>
-                              </div>
-                              <div className="theme-profile-actions">
-                                <button
-                                  className="settings-btn"
-                                  type="button"
-                                  onClick={() => {
-                                    applyThemePalette(profile.palette);
-                                    toast.success(`Applied: ${profile.name}`);
-                                  }}
-                                >
-                                  Apply
-                                </button>
-                                <button
-                                  className="settings-btn danger"
-                                  type="button"
-                                  onClick={() => {
-                                    setLocalThemeProfiles((prev) =>
-                                      prev.filter((p) => p.id !== profile.id),
-                                    );
-                                    toast.success("Profile o'chirildi");
-                                  }}
-                                >
-                                  Delete
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="theme-profile-list-wrap">
-                      <span className="settings-color-label">
-                        Community profiles{" "}
-                        {themeProfilesLoading
-                          ? "(loading...)"
-                          : `(${communityThemeProfiles.length})`}
-                      </span>
-                      <div className="theme-profile-list">
-                        {communityThemeProfiles.slice(0, 30).map((profile) => (
-                          <div className="theme-profile-card" key={profile.id}>
-                            <div className="theme-profile-main">
-                              <strong>{profile.name}</strong>
-                              <small>
-                                by {profile.author.displayName}
-                                {profile.author.username
-                                  ? ` (@${profile.author.username})`
-                                  : ""}
-                              </small>
-                              <div className="theme-profile-swatches">
-                                {[
-                                  profile.accentColor,
-                                  profile.layoutColor,
-                                  profile.textColor,
-                                  profile.backgroundColor,
-                                  profile.inputColor,
-                                ].map((color, idx) => (
-                                  <span
-                                    key={`${profile.id}-c-${idx}`}
-                                    style={{ background: color }}
-                                  />
-                                ))}
-                              </div>
-                            </div>
-                            <div className="theme-profile-actions">
-                              <button
-                                className="settings-btn"
-                                type="button"
-                                onClick={() => {
-                                  applyThemePalette({
-                                    accentColor: profile.accentColor,
-                                    layoutColor: profile.layoutColor,
-                                    textColor: profile.textColor,
-                                    backgroundColor: profile.backgroundColor,
-                                    inputColor: profile.inputColor,
-                                  });
-                                  toast.success(
-                                    `Applied community: ${profile.name}`,
-                                  );
-                                }}
-                              >
-                                Apply
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                        {!themeProfilesLoading &&
-                          communityThemeProfiles.length === 0 && (
-                            <small style={{ color: "var(--muted)" }}>
-                              Hozircha community profile yo'q.
-                            </small>
-                          )}
-                      </div>
-                    </div>
-
-                    <small style={{ color: "var(--muted)", fontSize: 12 }}>
-                      Ranglarni local saqlash, JSON import/export va community
-                      share/apply qilish mumkin.
-                    </small>
-                  </div>
-
-                  <div
-                    className="settings-row"
-                    style={{
-                      alignItems: "flex-start",
-                      flexDirection: "column",
-                      gap: 8,
-                    }}
-                  >
-                    <span>🖼️ Chat background image</span>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      <label
-                        className="settings-btn primary"
-                        style={{ cursor: "pointer" }}
-                      >
-                        Choose image
-                        <input
-                          type="file"
-                          accept="image/*"
-                          style={{ display: "none" }}
-                          onChange={async (e) => {
-                            const file = e.target.files?.[0];
-                            if (!file) return;
-                            try {
-                              const rawDataUrl = await readFileAsDataUrl(file);
-                              const optimizedDataUrl =
-                                await compressImageDataUrl(rawDataUrl);
-                              setChatBackgroundImage(optimizedDataUrl);
-                              toast.success("Chat background updated");
-                            } catch {
-                              toast.error("Could not set background image");
-                            } finally {
-                              e.currentTarget.value = "";
-                            }
-                          }}
-                        />
-                      </label>
-                      <button
-                        className="settings-btn"
-                        disabled={!chatBackgroundImage}
-                        onClick={() => {
-                          setChatBackgroundImage("");
-                          toast.success("Chat background removed");
-                        }}
-                      >
-                        Remove image
-                      </button>
-                    </div>
-                    <small style={{ color: "var(--muted)", fontSize: 12 }}>
-                      Rasm tanlansa chat oynasi fonida ko'rinadi.
-                    </small>
-                  </div>
-                </>
-              )}
-            </div>
-
-            {/* App Lock */}
-            {settingsCategory === "security" && (
-              <div className="settings-section">
-                <h4>🔒 App Passcode</h4>
-                {appLockEnabled ? (
-                  <div className="settings-row">
-                    <span>Passcode is set</span>
-                    <button
-                      className="settings-btn danger"
-                      onClick={handleRemovePasscode}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    {!showSetPasscode ? (
-                      <button
-                        className="settings-btn primary"
-                        onClick={() => setShowSetPasscode(true)}
-                      >
-                        Set Passcode
-                      </button>
-                    ) : (
-                      <div className="settings-passcode-form">
-                        <input
-                          type="password"
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          maxLength={PASSCODE_MAX_LENGTH}
-                          placeholder="New passcode (min 4 digits)"
-                          value={newPasscode}
-                          onChange={(e) =>
-                            setNewPasscode(
-                              sanitizePasscodeInput(e.target.value),
-                            )
-                          }
-                        />
-                        <input
-                          type="password"
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          maxLength={PASSCODE_MAX_LENGTH}
-                          placeholder="Confirm passcode"
-                          value={confirmPasscode}
-                          onChange={(e) =>
-                            setConfirmPasscode(
-                              sanitizePasscodeInput(e.target.value),
-                            )
-                          }
-                        />
-                        <div style={{ display: "flex", gap: 8 }}>
-                          <button
-                            className="settings-btn primary"
-                            onClick={handleSetPasscode}
-                          >
-                            Save
-                          </button>
-                          <button
-                            className="settings-btn"
-                            onClick={() => {
-                              setShowSetPasscode(false);
-                              setNewPasscode("");
-                              setConfirmPasscode("");
-                            }}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {/* Auto-lock */}
-                {appLockEnabled && (
-                  <>
-                    <div className="settings-row" style={{ marginTop: 12 }}>
-                      <span>⏱️ Auto-lock when idle</span>
-                      <label className="toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={autoLockEnabled}
-                          onChange={() => {
-                            const next = !autoLockEnabled;
-                            setAutoLockEnabled(next);
-                            localStorage.setItem("auto_lock", String(next));
-                          }}
-                        />
-                        <span className="toggle-slider" />
-                      </label>
-                    </div>
-                    {autoLockEnabled && (
-                      <div className="settings-row">
-                        <span style={{ fontSize: 13, color: "var(--muted)" }}>
-                          Lock after (minutes)
-                        </span>
-                        <select
-                          value={autoLockMinutes}
-                          onChange={(e) => {
-                            const val = parseInt(e.target.value, 10);
-                            setAutoLockMinutes(val);
-                            localStorage.setItem(
-                              "auto_lock_minutes",
-                              String(val),
-                            );
-                          }}
-                          style={{
-                            padding: "6px 12px",
-                            borderRadius: 8,
-                            border: "1px solid var(--line)",
-                            background: "var(--panel-hover)",
-                            color: "var(--text)",
-                            fontSize: 13,
-                          }}
-                        >
-                          <option value={1}>1 min</option>
-                          <option value={2}>2 min</option>
-                          <option value={5}>5 min</option>
-                          <option value={10}>10 min</option>
-                          <option value={15}>15 min</option>
-                          <option value={30}>30 min</option>
-                        </select>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-
-            {/* 2FA */}
-            <div className="settings-section">
-              {settingsCategory === "security" && (
-                <>
-                  <h4>🔐 Two-Factor Authentication (2FA)</h4>
-                  <div className="settings-row">
-                    <span>Status</span>
-                    {currentUser.isTwoFAEnabled ? (
-                      <span className="badge-on">Enabled</span>
-                    ) : (
-                      <span className="badge-off">Disabled</span>
-                    )}
-                  </div>
-                  {!currentUser.isTwoFAEnabled && (
-                    <>
-                      <button
-                        className="settings-btn primary"
-                        onClick={startTwoFASetup}
-                      >
-                        Setup 2FA
-                      </button>
-                      {twoFAQrDataUrl && (
-                        <img
-                          src={twoFAQrDataUrl}
-                          alt="2FA QR"
-                          className="qr-image"
-                        />
-                      )}
-                      {twoFAQrDataUrl && (
-                        <div className="settings-passcode-form">
-                          <input
-                            type="text"
-                            placeholder="Authenticator code"
-                            value={twoFASetupCode}
-                            onChange={(e) => setTwoFASetupCode(e.target.value)}
-                          />
-                          <button
-                            className="settings-btn primary"
-                            onClick={enableTwoFA}
-                          >
-                            Enable 2FA
-                          </button>
-                        </div>
-                      )}
-                    </>
-                  )}
-                  {currentUser.isTwoFAEnabled && (
-                    <div className="settings-passcode-form">
-                      <input
-                        type="text"
-                        placeholder="Enter 2FA code"
-                        value={twoFADisableCode}
-                        onChange={(e) => setTwoFADisableCode(e.target.value)}
-                      />
-                      <button
-                        className="settings-btn danger"
-                        onClick={disableTwoFA}
-                      >
-                        Disable 2FA
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
-
-              {/* ── NETWORK INFO ── */}
-              {settingsCategory === "general" && (
-                <>
-                  <div
-                    style={{
-                      borderTop: "1px solid var(--border)",
-                      marginTop: 18,
-                      paddingTop: 14,
-                    }}
-                  >
-                    <h4>🌐 Network</h4>
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        marginTop: 6,
-                      }}
-                    >
-                      <span style={{ fontSize: 13, color: "var(--muted)" }}>
-                        Public IP:{" "}
-                        <strong
-                          style={{
-                            color: "var(--text)",
-                            fontFamily: "monospace",
-                          }}
-                        >
-                          {publicIp || "—"}
-                        </strong>
-                      </span>
-                      <button
-                        className="settings-btn primary"
-                        onClick={fetchPublicIp}
-                        disabled={ipLoading}
-                        style={{ minWidth: 36, padding: "4px 10px" }}
-                      >
-                        {ipLoading ? "..." : "🔄"}
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* ── PROXY SETTINGS ── */}
-                  {isWails && (
-                    <div
-                      style={{
-                        borderTop: "1px solid var(--border)",
-                        marginTop: 18,
-                        paddingTop: 14,
-                      }}
-                    >
-                      <h4>🔒 Proxy</h4>
-                      <div className="settings-row">
-                        <span>Enable Proxy</span>
-                        <label className="toggle-switch">
-                          <input
-                            type="checkbox"
-                            checked={proxyEnabled}
-                            onChange={() => setProxyEnabled(!proxyEnabled)}
-                          />
-                          <span className="toggle-slider" />
-                        </label>
-                      </div>
-                      {proxyEnabled && (
-                        <div
-                          style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 8,
-                            marginTop: 8,
-                          }}
-                        >
-                          <div
-                            style={{
-                              display: "flex",
-                              gap: 8,
-                              alignItems: "center",
-                            }}
-                          >
-                            <select
-                              value={proxyType}
-                              onChange={(e) => setProxyType(e.target.value)}
-                              style={{
-                                padding: "6px 10px",
-                                borderRadius: 8,
-                                border: "1px solid var(--line)",
-                                background: "var(--panel-hover)",
-                                color: "var(--text)",
-                                fontSize: 13,
-                                minWidth: 90,
-                              }}
-                            >
-                              <option value="socks5">SOCKS5</option>
-                              <option value="http">HTTP</option>
-                            </select>
-                            <input
-                              type="text"
-                              placeholder="Host (127.0.0.1)"
-                              value={proxyHost}
-                              onChange={(e) => setProxyHost(e.target.value)}
-                              style={{
-                                flex: 1,
-                                padding: "6px 10px",
-                                borderRadius: 8,
-                                border: "1px solid var(--line)",
-                                background: "var(--panel-hover)",
-                                color: "var(--text)",
-                                fontSize: 13,
-                                fontFamily: "monospace",
-                              }}
-                            />
-                            <input
-                              type="text"
-                              placeholder="Port"
-                              value={proxyPort}
-                              onChange={(e) =>
-                                setProxyPort(
-                                  e.target.value.replace(/[^0-9]/g, ""),
-                                )
-                              }
-                              style={{
-                                width: 70,
-                                padding: "6px 10px",
-                                borderRadius: 8,
-                                border: "1px solid var(--line)",
-                                background: "var(--panel-hover)",
-                                color: "var(--text)",
-                                fontSize: 13,
-                                fontFamily: "monospace",
-                              }}
-                            />
-                          </div>
-                          <div style={{ display: "flex", gap: 8 }}>
-                            <button
-                              className="settings-btn primary"
-                              onClick={async () => {
-                                const ok = await SaveProxyConfig({
-                                  enabled: proxyEnabled,
-                                  type: proxyType,
-                                  host: proxyHost,
-                                  port: proxyPort,
-                                });
-                                if (ok) {
-                                  toast.success(
-                                    "Proxy saved. Restart app to apply.",
-                                  );
-                                } else {
-                                  toast.error("Failed to save proxy.");
-                                }
-                              }}
-                            >
-                              💾 Save
-                            </button>
-                            <button
-                              className="settings-btn"
-                              onClick={async () => {
-                                await SaveProxyConfig({
-                                  enabled: proxyEnabled,
-                                  type: proxyType,
-                                  host: proxyHost,
-                                  port: proxyPort,
-                                });
-                                toast("Restarting app...");
-                                setTimeout(() => RestartApp(), 500);
-                              }}
-                            >
-                              🔄 Save & Restart
-                            </button>
-                          </div>
-                          <span
-                            style={{
-                              fontSize: 11,
-                              color: "var(--muted)",
-                              opacity: 0.7,
-                            }}
-                          >
-                            Proxy applies after app restart
-                          </span>
-                        </div>
-                      )}
-                      {!proxyEnabled && proxyHost && (
-                        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                          <button
-                            className="settings-btn"
-                            onClick={async () => {
-                              setProxyHost("");
-                              setProxyPort("");
-                              await SaveProxyConfig({
-                                enabled: false,
-                                type: "socks5",
-                                host: "",
-                                port: "",
-                              });
-                              toast.success(
-                                "Proxy cleared. Restart app to apply.",
-                              );
-                            }}
-                          >
-                            Clear Proxy
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* ── UPDATE SECTION ── */}
-                  <div
-                    style={{
-                      borderTop: "1px solid var(--border)",
-                      marginTop: 18,
-                      paddingTop: 14,
-                    }}
-                  >
-                    <h4>🔄 Update</h4>
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        marginTop: 6,
-                      }}
-                    >
-                      <span style={{ fontSize: 13, color: "var(--muted)" }}>
-                        Current version:{" "}
-                        <strong style={{ color: "var(--text)" }}>
-                          v{appVersion}
-                        </strong>
-                      </span>
-                      <button
-                        className="settings-btn primary"
-                        onClick={async () => {
-                          try {
-                            const result: any = await CheckForUpdate();
-                            void loadUpdateHistory();
-                            if (result.available) {
-                              setUpdateAvailable({
-                                newVersion: result.newVersion,
-                                notes: result.notes || "",
-                              });
-                              setShowSettings(false);
-                            } else {
-                              toast.success("You are on the latest version!");
-                            }
-                          } catch {
-                            toast.error("Could not check for updates");
-                          }
-                        }}
-                      >
-                        Check for updates
-                      </button>
-                    </div>
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        marginTop: 10,
-                      }}
-                    >
-                      <label
-                        style={{
-                          fontSize: 13,
-                          color: "var(--muted)",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 6,
-                          cursor: "pointer",
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={autoUpdateEnabled}
-                          onChange={(e) => {
-                            const val = e.target.checked;
-                            setAutoUpdateEnabled(val);
-                            localStorage.setItem(
-                              "auto_update",
-                              val ? "true" : "false",
-                            );
-                          }}
-                        />
-                        Auto-check for updates
-                      </label>
-                    </div>
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 8,
-                        marginTop: 12,
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "flex",
-                          gap: 10,
-                          alignItems: "center",
-                          flexWrap: "wrap",
-                        }}
-                      >
-                        <select
-                          value={selectedUpdateVersion}
-                          onChange={(e) =>
-                            setSelectedUpdateVersion(e.target.value)
-                          }
-                          disabled={
-                            isLoadingUpdateHistory ||
-                            updateHistory.length === 0 ||
-                            isUpdating
-                          }
-                          style={{ minWidth: 260, flex: "1 1 260px" }}
-                        >
-                          {updateHistory.length === 0 && (
-                            <option value="">No stored versions yet</option>
-                          )}
-                          {updateHistory.map((item) => (
-                            <option key={item.version} value={item.version}>
-                              {item.version}
-                              {item.isLatest ? " (latest)" : ""}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          className="settings-btn primary"
-                          onClick={() => {
-                            if (!selectedUpdateVersion) {
-                              return;
-                            }
-                            void handleUpdateInstall(
-                              selectedUpdateVersion,
-                              true,
-                            );
-                          }}
-                          disabled={!selectedUpdateVersion || isUpdating}
-                        >
-                          Install selected version
-                        </button>
-                      </div>
-                      <span
-                        style={{
-                          fontSize: 11,
-                          color: "var(--muted)",
-                          opacity: 0.8,
-                        }}
-                      >
-                        Choose a stored AWS build to rollback or repair.
-                      </span>
-                      {selectedUpdateHistoryItem ? (
-                        <span style={{ fontSize: 12, color: "var(--muted)" }}>
-                          {selectedUpdateHistoryItem.notes ||
-                            `Stored build ${selectedUpdateHistoryItem.version} is ready.`}
-                        </span>
-                      ) : !isLoadingUpdateHistory ? (
-                        <span style={{ fontSize: 12, color: "var(--muted)" }}>
-                          No stored builds found yet.
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {/* ── DEBUG SECTION ── */}
-              {settingsCategory === "developer" && developerUnlocked && (
-                <div
-                  style={{
-                    borderTop: "1px solid var(--border)",
-                    marginTop: 18,
-                    paddingTop: 14,
-                  }}
-                >
-                  <h4>🐞 Debug</h4>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      marginTop: 6,
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    <button
-                      className="settings-btn primary"
-                      onClick={async () => {
-                        try {
-                          const ok = await OpenDevTools();
-                          if (!ok)
-                            toast(
-                              "DevTools faqat debug-build da mavjud (F12 / Ctrl+Shift+I).",
-                            );
-                        } catch {
-                          toast.error("DevTools ochib bo'lmadi.");
-                        }
-                      }}
-                    >
-                      Open DevTools
-                    </button>
-                    <span style={{ fontSize: 12, color: "var(--muted)" }}>
-                      Yoki: F12 / Ctrl+Shift+I / o'ng-klik → Inspect
-                    </span>
-                  </div>
-                  <div style={{ marginTop: 12 }}>
-                    <button
-                      className="settings-btn"
-                      onClick={async () => {
-                        const ok = await runLoopbackCallTest();
-                        if (ok)
-                          toast.success(
-                            "Loopback test ishladi — siz o'z ovozingizni eshitishingiz kerak. Console'da [Loopback] log'larni tekshiring.",
-                          );
-                        else
-                          toast.error(
-                            "Loopback test muvaffaqiyatsiz. Console'ni tekshiring.",
-                          );
-                      }}
-                    >
-                      🔁 Run Loopback Call Test (E2E)
-                    </button>
-                    <div
-                      style={{
-                        fontSize: 12,
-                        color: "var(--muted)",
-                        marginTop: 6,
-                      }}
-                    >
-                      Mic → RNNoise → RTCPeerConnection → audio element. 5
-                      soniya o'zingizni eshitsangiz audio-pipeline OK.
-                    </div>
-                  </div>
-
-                  {/* ── ICE PROBE ── */}
-                  <div
-                    style={{
-                      marginTop: 14,
-                      paddingTop: 12,
-                      borderTop: "1px dashed var(--border)",
-                    }}
-                  >
-                    {/* P2P toggle */}
-                    <div
-                      style={{
-                        marginBottom: 10,
-                        padding: 10,
-                        background: "var(--surface-2)",
-                        borderRadius: 6,
-                      }}
-                    >
-                      <label
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 8,
-                          cursor: "pointer",
-                          fontSize: 13,
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          defaultChecked={(() => {
-                            try {
-                              return (
-                                localStorage.getItem("webrtc_force_relay") !==
-                                "true"
-                              );
-                            } catch {
-                              return true;
-                            }
-                          })()}
-                          onChange={(e) => {
-                            const preferP2P = e.target.checked;
-                            try {
-                              localStorage.setItem(
-                                "webrtc_force_relay",
-                                preferP2P ? "false" : "true",
-                              );
-                              toast.success(
-                                preferP2P
-                                  ? "P2P afzal: keyingi callda direct ulanish sinaladi (past ms)"
-                                  : "TURN-only: barcha calllar relay orqali (ishonchli, yuqori ms)",
-                              );
-                            } catch {}
-                          }}
-                        />
-                        <span>
-                          <strong>Prefer P2P (lower latency)</strong>
-                        </span>
-                      </label>
-                      <div
-                        style={{
-                          fontSize: 11,
-                          color: "var(--muted)",
-                          marginTop: 4,
-                          marginLeft: 24,
-                        }}
-                      >
-                        Yoqilgan: ICE avval direct (host/srflx) sinaydi →
-                        ishlasa 30-100ms, ishlamasa avtomatik TURN'ga o'tadi.
-                        <br />
-                        O'chirilgan: faqat TURN (relay) — ishonchli lekin
-                        150-300ms.
-                      </div>
-                    </div>
-
-                    <button
-                      className="settings-btn"
-                      disabled={iceProbing}
-                      onClick={async () => {
-                        setIceProbing(true);
-                        try {
-                          const res = await probeAllIceServers();
-                          setIceProbeResults(res);
-                          localStorage.setItem(
-                            "ice_probe_at",
-                            String(Date.now()),
-                          );
-                          const okCount = res.filter((r) => r.ok).length;
-                          if (okCount === 0)
-                            toast.error("Hech qaysi server ishlamadi!");
-                          else
-                            toast.success(
-                              `${okCount}/${res.length} ICE server ishlaydi`,
-                            );
-                        } finally {
-                          setIceProbing(false);
-                        }
-                      }}
-                    >
-                      {iceProbing
-                        ? "🔬 Probing..."
-                        : "🔬 Run ICE Probe (test STUN/TURN)"}
-                    </button>
-                    <div
-                      style={{
-                        fontSize: 12,
-                        color: "var(--muted)",
-                        marginTop: 6,
-                      }}
-                    >
-                      Har bir STUN/TURN serverni alohida sinaydi. Ishlaydiganlar
-                      call paytida birinchi ishlatiladi.
-                    </div>
-                    {iceProbeResults.length > 0 && (
-                      <div
-                        style={{
-                          marginTop: 10,
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 4,
-                          fontFamily: "monospace",
-                          fontSize: 11,
-                        }}
-                      >
-                        {iceProbeResults.map((r) => (
-                          <div
-                            key={r.url}
-                            style={{
-                              padding: "4px 8px",
-                              borderRadius: 4,
-                              background: r.ok
-                                ? "rgba(76,175,80,0.12)"
-                                : "rgba(244,67,54,0.12)",
-                              color: r.ok ? "#4caf50" : "#f44336",
-                              display: "flex",
-                              justifyContent: "space-between",
-                              gap: 8,
-                            }}
-                          >
-                            <span
-                              style={{
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {r.ok ? "✅" : "❌"} {r.url}
-                            </span>
-                            <span style={{ flexShrink: 0 }}>
-                              [{r.candidateTypes.join(",") || "none"}] {r.rttMs}
-                              ms
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <div className="settings-developer-unlock-row">
-                <button
-                  className="settings-btn"
-                  type="button"
-                  onClick={handleDeveloperTap}
-                >
-                  {developerUnlocked
-                    ? "I am developer"
-                    : `I am developer (${developerTapCount}/3)`}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <SettingsModal
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
+        currentUser={currentUser}
+        setCurrentUser={setCurrentUser}
+        startupEnabled={startupEnabled}
+        toggleStartup={toggleStartup}
+        launchMinimizedOnStartup={launchMinimizedOnStartup}
+        toggleLaunchMinimizedOnStartup={toggleLaunchMinimizedOnStartup}
+        closeToTray={closeToTray}
+        setCloseToTray={setCloseToTray}
+        toastPosition={toastPosition}
+        setToastPositionState={setToastPositionState}
+        smoothCaret={smoothCaret}
+        setSmoothCaret={setSmoothCaret}
+        cursorBlink={cursorBlink}
+        setCursorBlink={setCursorBlink}
+        sendSound={sendSound}
+        setSendSound={setSendSound}
+        ringtoneUrl={ringtoneUrl}
+        ringtoneLabel={ringtoneLabel}
+        ringtoneUploading={ringtoneUploading}
+        useServerRingtone={useServerRingtone}
+        previewRingtone={previewRingtone}
+        resetCustomRingtone={resetCustomRingtone}
+        handleRingtoneUpload={handleRingtoneUpload}
+        dialToneUrl={dialToneUrl}
+        dialToneLabel={dialToneLabel}
+        dialToneUploading={dialToneUploading}
+        previewDialTone={previewDialTone}
+        resetCustomDialTone={resetCustomDialTone}
+        handleDialToneUpload={handleDialToneUpload}
+        themeAccentColor={themeAccentColor}
+        setThemeAccentColor={setThemeAccentColor}
+        themeLayoutColor={themeLayoutColor}
+        setThemeLayoutColor={setThemeLayoutColor}
+        themeTextColor={themeTextColor}
+        setThemeTextColor={setThemeTextColor}
+        themeBackgroundColor={themeBackgroundColor}
+        setThemeBackgroundColor={setThemeBackgroundColor}
+        themeInputColor={themeInputColor}
+        setThemeInputColor={setThemeInputColor}
+        themeProfileName={themeProfileName}
+        setThemeProfileName={setThemeProfileName}
+        saveCurrentThemeProfileLocally={saveCurrentThemeProfileLocally}
+        exportThemeProfilesToFile={exportThemeProfilesToFile}
+        importThemeProfilesFromFile={importThemeProfilesFromFile}
+        shareCurrentThemeProfile={shareCurrentThemeProfile}
+        themeProfilesSharing={themeProfilesSharing}
+        localThemeProfiles={localThemeProfiles}
+        setLocalThemeProfiles={setLocalThemeProfiles}
+        communityThemeProfiles={communityThemeProfiles}
+        themeProfilesLoading={themeProfilesLoading}
+        applyThemePalette={applyThemePalette}
+        chatBackgroundImage={chatBackgroundImage}
+        setChatBackgroundImage={setChatBackgroundImage}
+        appLockEnabled={appLockEnabled}
+        setAppLockEnabled={setAppLockEnabled}
+        setAppLocked={setAppLocked}
+        autoLockEnabled={autoLockEnabled}
+        setAutoLockEnabled={setAutoLockEnabled}
+        autoLockMinutes={autoLockMinutes}
+        setAutoLockMinutes={setAutoLockMinutes}
+        appVersion={appVersion}
+        setUpdateAvailable={setUpdateAvailable}
+        loadUpdateHistory={loadUpdateHistory}
+        autoUpdateEnabled={autoUpdateEnabled}
+        setAutoUpdateEnabled={setAutoUpdateEnabled}
+        selectedUpdateVersion={selectedUpdateVersion}
+        setSelectedUpdateVersion={setSelectedUpdateVersion}
+        isLoadingUpdateHistory={isLoadingUpdateHistory}
+        updateHistory={updateHistory}
+        isUpdating={isUpdating}
+        handleUpdateInstall={handleUpdateInstall}
+        selectedUpdateHistoryItem={selectedUpdateHistoryItem}
+        runLoopbackCallTest={runLoopbackCallTest}
+        probeAllIceServers={probeAllIceServers}
+        iceProbeResults={iceProbeResults}
+        setIceProbeResults={setIceProbeResults}
+      />
 
       {/* ── MY PROFILE MODAL ── */}
-      {showMyProfile && currentUser && (
-        <div
-          className="lightbox-overlay"
-          onClick={() => setShowMyProfile(false)}
-        >
-          <div
-            className="my-profile-dialog"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="settings-header">
-              <h3>👤 My Profile</h3>
-              <button
-                className="settings-close"
-                onClick={() => setShowMyProfile(false)}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="my-profile-avatar-section">
-              <div className="my-profile-avatar-wrapper">
-                {hasUsableAvatar(currentUser.avatarUrl) &&
-                !brokenAvatarIds[currentUser.id] ? (
-                  <img
-                    src={`${API_URL}${currentUser.avatarUrl}`}
-                    alt="Avatar"
-                    className="my-profile-avatar-img clickable"
-                    onClick={() =>
-                      setLightboxUrl(`${API_URL}${currentUser.avatarUrl}`)
-                    }
-                    onError={() =>
-                      setBrokenAvatarIds((prev) => ({
-                        ...prev,
-                        [currentUser.id]: true,
-                      }))
-                    }
-                  />
-                ) : (
-                  <div className="my-profile-avatar-placeholder">
-                    {getInitialLetter(currentUser.displayName)}
-                  </div>
-                )}
-                <label className="my-profile-avatar-edit" title="Change photo">
-                  📷
-                  <input
-                    type="file"
-                    accept="image/*"
-                    style={{ display: "none" }}
-                    onChange={async (e) => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      const formData = new FormData();
-                      formData.append("file", file);
-                      try {
-                        const uploadRes = await api.post<{ url: string }>(
-                          "/upload",
-                          formData,
-                          {
-                            headers: { "Content-Type": "multipart/form-data" },
-                          },
-                        );
-                        const avatarUrl = uploadRes.data.url;
-                        const profileRes = await api.put<{ user: PublicUser }>(
-                          "/auth/profile",
-                          { avatarUrl },
-                        );
-                        setCurrentUser(profileRes.data.user);
-                        toast.success("Profile photo updated!");
-                      } catch {
-                        toast.error("Failed to upload photo");
-                      }
-                    }}
-                  />
-                </label>
-              </div>
-            </div>
-
-            <div className="my-profile-form">
-              <div className="my-profile-field">
-                <label>Name</label>
-                <input
-                  type="text"
-                  value={editDisplayName}
-                  onChange={(e) => setEditDisplayName(e.target.value)}
-                  placeholder="Display name"
-                  maxLength={40}
-                />
-              </div>
-              <div className="my-profile-field">
-                <label>Status</label>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <input
-                    type="text"
-                    value={editStatusEmoji}
-                    onChange={(e) => setEditStatusEmoji(e.target.value)}
-                    placeholder="😊"
-                    maxLength={4}
-                    style={{ width: 50, textAlign: "center", fontSize: 20 }}
-                  />
-                  <input
-                    type="text"
-                    value={editStatusText}
-                    onChange={(e) => setEditStatusText(e.target.value)}
-                    placeholder="What are you up to?"
-                    maxLength={100}
-                    style={{ flex: 1 }}
-                  />
-                </div>
-                {(currentUser.statusEmoji || currentUser.statusText) && (
-                  <small style={{ color: "var(--text-muted)", marginTop: 4 }}>
-                    Current: {currentUser.statusEmoji} {currentUser.statusText}
-                  </small>
-                )}
-              </div>
-              <div className="my-profile-field">
-                <label>Username</label>
-                <div className="username-input-wrapper">
-                  <span className="username-at">@</span>
-                  <input
-                    type="text"
-                    value={editUsername}
-                    onChange={(e) =>
-                      setEditUsername(
-                        e.target.value.replace(/[^a-zA-Z0-9_]/g, ""),
-                      )
-                    }
-                    placeholder="username"
-                    maxLength={30}
-                  />
-                </div>
-                {currentUser.username && (
-                  <small className="username-preview">
-                    @{currentUser.username}
-                  </small>
-                )}
-              </div>
-              <div className="my-profile-field">
-                <label>Email</label>
-                <input
-                  type="text"
-                  value={currentUser.email}
-                  disabled
-                  className="profile-disabled-input"
-                />
-              </div>
-              <button
-                className="settings-btn primary"
-                disabled={profileSaving}
-                onClick={async () => {
-                  setProfileSaving(true);
-                  try {
-                    const data: Record<string, string | null> = {};
-                    if (
-                      editDisplayName.trim() &&
-                      editDisplayName !== currentUser.displayName
-                    )
-                      data.displayName = editDisplayName.trim();
-                    if (editUsername !== (currentUser.username ?? ""))
-                      data.username = editUsername || null;
-
-                    // Update status via socket (real-time broadcast)
-                    const newStatusText = editStatusText.trim() || null;
-                    const newStatusEmoji = editStatusEmoji.trim() || null;
-                    const statusChanged =
-                      newStatusText !== (currentUser.statusText ?? null) ||
-                      newStatusEmoji !== (currentUser.statusEmoji ?? null);
-                    if (statusChanged && socketRef.current) {
-                      socketRef.current.emit("status:update", {
-                        statusText: newStatusText,
-                        statusEmoji: newStatusEmoji,
-                      });
-                    }
-
-                    if (Object.keys(data).length === 0 && !statusChanged) {
-                      toast("No changes");
-                      setProfileSaving(false);
-                      return;
-                    }
-                    if (Object.keys(data).length > 0) {
-                      const res = await api.put<{ user: PublicUser }>(
-                        "/auth/profile",
-                        data,
-                      );
-                      setCurrentUser(res.data.user);
-                    }
-                    toast.success("Profile updated!");
-                    setShowMyProfile(false);
-                  } catch (err: any) {
-                    toast.error(
-                      err?.response?.data?.message ?? "An error occurred",
-                    );
-                  } finally {
-                    setProfileSaving(false);
-                  }
-                }}
-              >
-                {profileSaving ? "Saving..." : "💾 Save"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <MyProfileModal
+        isOpen={showMyProfile}
+        onClose={() => setShowMyProfile(false)}
+        currentUser={currentUser}
+        setCurrentUser={setCurrentUser}
+        socketRef={socketRef}
+        setLightboxUrl={setLightboxUrl}
+        brokenAvatarIds={brokenAvatarIds}
+        setBrokenAvatarIds={setBrokenAvatarIds}
+      />
 
       {/* ── USER PROFILE VIEW POPUP ── */}
       {profileViewUser && (
-        <div
-          className="lightbox-overlay"
-          onClick={() => setProfileViewUser(null)}
-        >
-          <div
-            className="user-profile-popup"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="settings-header">
-              <h3>👤 Profile</h3>
-              <button
-                className="settings-close"
-                onClick={() => setProfileViewUser(null)}
-              >
-                ✕
-              </button>
-            </div>
-            <div className="user-profile-popup-body">
-              {hasUsableAvatar(profileViewUser.avatarUrl) &&
-              !brokenAvatarIds[profileViewUser.id] ? (
-                <img
-                  src={`${API_URL}${profileViewUser.avatarUrl}`}
-                  alt="Avatar"
-                  className="user-profile-popup-avatar-img clickable"
-                  onClick={() =>
-                    setLightboxUrl(`${API_URL}${profileViewUser.avatarUrl}`)
-                  }
-                  onError={() =>
-                    setBrokenAvatarIds((prev) => ({
-                      ...prev,
-                      [profileViewUser.id]: true,
-                    }))
-                  }
-                />
-              ) : (
-                <div className="user-profile-popup-avatar">
-                  {getInitialLetter(profileViewUser.displayName)}
-                </div>
-              )}
-              <h3 className="user-profile-popup-name">
-                {profileViewUser.displayName}
-              </h3>
-              {profileViewUser.username && (
-                <span className="user-profile-popup-username">
-                  @{profileViewUser.username}
-                </span>
-              )}
-              <small className="user-profile-popup-status">
-                {profileViewUser.isOnline
-                  ? "🟢 Online"
-                  : formatLastSeen(profileViewUser.lastSeenAt)}
-              </small>
-              <div className="user-profile-popup-actions">
-                <button
-                  className="action-btn"
-                  onClick={() => {
-                    // Switch to direct chat with this user
-                    setChatMode("user");
-                    setSelectedUserId(profileViewUser.id);
-                    setSelectedGroupId("");
-                    if (isMobileViewport) setIsMobileChatOpen(true);
-                    setSidebarTab("contacts");
-                    setProfileViewUser(null);
-                  }}
-                >
-                  💬 Send message
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <UserProfileModal
+          user={profileViewUser}
+          onClose={() => setProfileViewUser(null)}
+          apiUrl={API_URL}
+          onSendMessage={(u) => {
+            setChatMode("user");
+            setSelectedUserId(u.id);
+            setSelectedGroupId("");
+            if (isMobileViewport) setIsMobileChatOpen(true);
+            setSidebarTab("contacts");
+          }}
+          onOpenLightbox={(url) => setLightboxUrl(url)}
+          brokenAvatars={brokenAvatarIds}
+          onAvatarError={(uid) =>
+            setBrokenAvatarIds((prev) => ({ ...prev, [uid]: true }))
+          }
+          hasUsableAvatar={hasUsableAvatar}
+          getInitialLetter={getInitialLetter}
+          formatLastSeen={formatLastSeen}
+        />
       )}
 
       {/* ── LEFT CHAT LIST (always visible like Telegram) ── */}
@@ -10067,36 +8291,82 @@ function App() {
                   : `v${activeUser.clientVersion || "?"}`}
               </span>
             )}
-            {callStatus === "idle" &&
+            {incomingCall ? (
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <button
+                  className="btn-call-header-accept"
+                  style={{
+                    background: "#16a34a",
+                    color: "#ffffff",
+                    fontWeight: 700,
+                    borderRadius: 8,
+                    padding: "6px 12px",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    border: "none",
+                    cursor: "pointer",
+                    boxShadow: "0 0 12px rgba(22, 163, 74, 0.7)"
+                  }}
+                  onClick={() => void acceptCall()}
+                >
+                  📞 Accept
+                </button>
+                <button
+                  className="btn-call-header-decline"
+                  style={{
+                    background: "#dc2626",
+                    color: "#ffffff",
+                    fontWeight: 700,
+                    borderRadius: 8,
+                    padding: "6px 12px",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    border: "none",
+                    cursor: "pointer"
+                  }}
+                  onClick={() => declineCall()}
+                >
+                  ✕ Deny
+                </button>
+              </div>
+            ) : (
+              callStatus === "idle" &&
               chatMode === "user" &&
               selectedUserId !== currentUser.id && (
                 <button disabled={!activeUser} onClick={() => startCall()}>
                   📞 Call
                 </button>
-              )}
+              )
+            )}
             {callStatus === "idle" && chatMode === "group" && activeGroup && (
               <button
                 onClick={async () => {
                   if (!socketRef.current || !selectedGroupId) return;
                   try {
+                    // Unlock audio element within user gesture context
+                    const audioEl = remoteAudioRef.current;
+                    if (audioEl) {
+                      audioEl.muted = true;
+                      audioEl.srcObject = new MediaStream();
+                      audioEl
+                        .play()
+                        .then(() => {
+                          audioEl.muted = false;
+                        })
+                        .catch(() => {
+                          audioEl.muted = false;
+                        });
+                      window.setTimeout(() => {
+                        if (remoteAudioRef.current)
+                          remoteAudioRef.current.muted = false;
+                      }, 0);
+                    }
+
                     callGroupIdRef.current = selectedGroupId;
                     setCallMicMuted(false);
-                    const audioConstraints: any = {
-                      noiseSuppression: noiseReduction,
-                      echoCancellation: noiseReduction,
-                      autoGainControl: noiseReduction,
-                      googEchoCancellation: noiseReduction,
-                      googAutoGainControl: noiseReduction,
-                      googNoiseSuppression: noiseReduction,
-                      googHighpassFilter: noiseReduction,
-                      googTypingNoiseDetection: noiseReduction,
-                      ...(selectedAudioInput
-                        ? { deviceId: { exact: selectedAudioInput } }
-                        : {}),
-                    };
-                    let rawStream = await navigator.mediaDevices.getUserMedia({
-                      audio: audioConstraints,
-                    });
+                    let rawStream = await getCallMicStream();
                     rawStream = await applyRNNoiseFilter(rawStream);
                     localCallStreamRef.current = rawStream;
 
@@ -10120,20 +8390,24 @@ function App() {
                     const fallbackMemberIds = (activeGroup.members ?? [])
                       .map((member) => member.userId)
                       .filter((memberId) => memberId !== currentUser.id);
-                    const memberIds =
-                      activeTargetIds.length > 0
-                        ? activeTargetIds
-                        : fallbackMemberIds;
+                    const isJoiningExisting = activeTargetIds.length > 0;
+                    const memberIds = isJoiningExisting
+                      ? activeTargetIds
+                      : fallbackMemberIds;
 
                     for (const memberId of memberIds) {
-                      const peer = setupGroupPeerConnection(memberId);
-                      const offer = await peer.createOffer();
-                      await peer.setLocalDescription(offer);
-                      socketRef.current.emit("group:call:offer", {
-                        groupId: selectedGroupId,
-                        toUserId: memberId,
-                        sdp: offer,
-                      });
+                      // If starting new call, ring all members.
+                      // If joining existing call, only initiate offer if my ID < target ID to avoid glare.
+                      if (!isJoiningExisting || currentUser.id < memberId) {
+                        const peer = setupGroupPeerConnection(memberId);
+                        const offer = await peer.createOffer();
+                        await peer.setLocalDescription(offer);
+                        socketRef.current.emit("group:call:offer", {
+                          groupId: selectedGroupId,
+                          toUserId: memberId,
+                          sdp: offer,
+                        });
+                      }
                     }
                   } catch (err) {
                     console.error("Group call start error:", err);
@@ -10465,6 +8739,65 @@ function App() {
                               userVoiceQueue,
                             )}
                           </div>
+                          {messageReactions[message.id] &&
+                            Object.keys(messageReactions[message.id]).length > 0 && (
+                              <div
+                                className="msg-reactions-row"
+                                style={{
+                                  display: "flex",
+                                  flexWrap: "wrap",
+                                  gap: 4,
+                                  marginTop: 4,
+                                  marginBottom: 2,
+                                }}
+                              >
+                                {Object.entries(messageReactions[message.id]).map(
+                                  ([emoji, userIds]) => {
+                                    const hasReacted = userIds.includes(
+                                      currentUser.id,
+                                    );
+                                    return (
+                                      <button
+                                        key={emoji}
+                                        type="button"
+                                        className={`msg-reaction-badge${hasReacted ? " active" : ""}`}
+                                        style={{
+                                          display: "inline-flex",
+                                          alignItems: "center",
+                                          gap: 3,
+                                          fontSize: "12px",
+                                          padding: "2px 7px",
+                                          borderRadius: "12px",
+                                          border: hasReacted
+                                            ? "1px solid #16a34a"
+                                            : "1px solid rgba(255,255,255,0.15)",
+                                          background: hasReacted
+                                            ? "rgba(22, 163, 74, 0.25)"
+                                            : "rgba(0,0,0,0.35)",
+                                          color: "#fff",
+                                          cursor: "pointer",
+                                        }}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          toggleReaction(message.id, emoji, false);
+                                        }}
+                                      >
+                                        <span>{emoji}</span>
+                                        <span
+                                          style={{
+                                            fontSize: 10,
+                                            fontWeight: 600,
+                                            opacity: 0.85,
+                                          }}
+                                        >
+                                          {userIds.length}
+                                        </span>
+                                      </button>
+                                    );
+                                  },
+                                )}
+                              </div>
+                            )}
                           <time>
                             {new Date(message.createdAt).toLocaleTimeString()}
                             <span
@@ -10647,6 +8980,65 @@ function App() {
                               groupVoiceQueue,
                             )}
                           </div>
+                          {messageReactions[message.id] &&
+                            Object.keys(messageReactions[message.id]).length > 0 && (
+                              <div
+                                className="msg-reactions-row"
+                                style={{
+                                  display: "flex",
+                                  flexWrap: "wrap",
+                                  gap: 4,
+                                  marginTop: 4,
+                                  marginBottom: 2,
+                                }}
+                              >
+                                {Object.entries(messageReactions[message.id]).map(
+                                  ([emoji, userIds]) => {
+                                    const hasReacted = userIds.includes(
+                                      currentUser.id,
+                                    );
+                                    return (
+                                      <button
+                                        key={emoji}
+                                        type="button"
+                                        className={`msg-reaction-badge${hasReacted ? " active" : ""}`}
+                                        style={{
+                                          display: "inline-flex",
+                                          alignItems: "center",
+                                          gap: 3,
+                                          fontSize: "12px",
+                                          padding: "2px 7px",
+                                          borderRadius: "12px",
+                                          border: hasReacted
+                                            ? "1px solid #16a34a"
+                                            : "1px solid rgba(255,255,255,0.15)",
+                                          background: hasReacted
+                                            ? "rgba(22, 163, 74, 0.25)"
+                                            : "rgba(0,0,0,0.35)",
+                                          color: "#fff",
+                                          cursor: "pointer",
+                                        }}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          toggleReaction(message.id, emoji, true);
+                                        }}
+                                      >
+                                        <span>{emoji}</span>
+                                        <span
+                                          style={{
+                                            fontSize: 10,
+                                            fontWeight: 600,
+                                            opacity: 0.85,
+                                          }}
+                                        >
+                                          {userIds.length}
+                                        </span>
+                                      </button>
+                                    );
+                                  },
+                                )}
+                              </div>
+                            )}
                           <time>
                             {new Date(message.createdAt).toLocaleTimeString()}
                           </time>
@@ -10727,21 +9119,26 @@ function App() {
               })()}
             <button
               className="sel-btn sel-delete"
-              onClick={async () => {
+              onClick={() => {
                 if (selectedMessageIds.size === 0) return;
-                try {
-                  await api.delete("/messages", {
-                    data: { messageIds: [...selectedMessageIds] },
-                  });
-                  setMessages((prev) =>
-                    prev.filter((m) => !selectedMessageIds.has(m.id)),
-                  );
-                  toast.success(`${selectedMessageIds.size} messages deleted`);
-                } catch (err) {
-                  toast.error(readAxiosMessage(err, "Delete error"));
-                }
-                setSelectedMessageIds(new Set());
-                setIsSelectionMode(false);
+                const isGroup = (chatMode as string) === "group";
+                const hasMyMessage = isGroup
+                  ? false
+                  : messages.some(
+                      (m) =>
+                        selectedMessageIds.has(m.id) &&
+                        m.senderId === currentUser?.id,
+                    );
+                const activePartnerName =
+                  users.find((u) => u.id === selectedUserId)?.displayName ||
+                  "suhbatdosh";
+                setDeleteModalState({
+                  isOpen: true,
+                  messageIds: [...selectedMessageIds],
+                  canDeleteForEveryone: hasMyMessage,
+                  recipientName: activePartnerName,
+                  isGroup,
+                });
               }}
             >
               🗑 Delete ({selectedMessageIds.size})
@@ -10759,83 +9156,17 @@ function App() {
         )}
 
         {/* ── Forward modal ── */}
-        {showForwardModal && (
-          <div
-            className="forward-modal-overlay"
-            onClick={() => setShowForwardModal(false)}
-          >
-            <div className="forward-modal" onClick={(e) => e.stopPropagation()}>
-              <h3>Forward to</h3>
-              <div className="forward-user-list">
-                {/* Saved Messages (self) */}
-                <button
-                  className="forward-user-item"
-                  onClick={async () => {
-                    try {
-                      await api.post("/messages/forward", {
-                        messageIds: [...selectedMessageIds],
-                        recipientId: currentUser.id,
-                      });
-                      toast.success(
-                        `${selectedMessageIds.size} message(s) saved`,
-                      );
-                    } catch (err) {
-                      toast.error(readAxiosMessage(err, "Failed to save"));
-                    }
-                    setShowForwardModal(false);
-                    setSelectedMessageIds(new Set());
-                    setIsSelectionMode(false);
-                  }}
-                >
-                  <span
-                    className="forward-user-avatar saved-avatar"
-                    style={{ fontSize: 16 }}
-                  >
-                    🔖
-                  </span>
-                  <span className="forward-user-name">Saved Messages</span>
-                </button>
-                {users
-                  .filter((u) => u.id !== currentUser.id)
-                  .map((u) => (
-                    <button
-                      key={u.id}
-                      className="forward-user-item"
-                      onClick={async () => {
-                        try {
-                          await api.post("/messages/forward", {
-                            messageIds: [...selectedMessageIds],
-                            recipientId: u.id,
-                          });
-                          toast.success(
-                            `${selectedMessageIds.size} message(s) forwarded to ${u.displayName}`,
-                          );
-                        } catch (err) {
-                          toast.error(
-                            readAxiosMessage(err, "Failed to forward"),
-                          );
-                        }
-                        setShowForwardModal(false);
-                        setSelectedMessageIds(new Set());
-                        setIsSelectionMode(false);
-                      }}
-                    >
-                      <span className="forward-user-avatar">
-                        {u.displayName.charAt(0).toUpperCase()}
-                      </span>
-                      <span className="forward-user-name">{u.displayName}</span>
-                    </button>
-                  ))}
-              </div>
-              <button
-                className="forward-close-btn"
-                onClick={() => setShowForwardModal(false)}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
+        <ForwardModal
+          isOpen={showForwardModal}
+          onClose={() => setShowForwardModal(false)}
+          currentUser={currentUser}
+          users={users}
+          selectedMessageIds={selectedMessageIds}
+          onForwardComplete={() => {
+            setSelectedMessageIds(new Set());
+            setIsSelectionMode(false);
+          }}
+        />
 
         <section className="composer">
           {/* Attachment preview area */}
@@ -11069,6 +9400,172 @@ function App() {
                 </div>
               )}
 
+              {/* ── TEXT FORMATTING FLOATING TOOLBAR ── */}
+              {showFormatBar && (
+                <div
+                  className="formatting-bubble-toolbar"
+                  onMouseDown={(e) => e.preventDefault()}
+                >
+                  {showLinkPrompt ? (
+                    <div className="format-link-box">
+                      <input
+                        type="text"
+                        className="format-link-input"
+                        placeholder="https://..."
+                        value={linkInputUrl}
+                        autoFocus
+                        onChange={(e) => setLinkInputUrl(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            applyLinkFormatting(linkInputUrl);
+                          } else if (e.key === "Escape") {
+                            setShowLinkPrompt(false);
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="format-link-btn"
+                        onClick={() => applyLinkFormatting(linkInputUrl)}
+                      >
+                        OK
+                      </button>
+                      <button
+                        type="button"
+                        className="format-btn"
+                        style={{ fontSize: 11 }}
+                        onClick={() => setShowLinkPrompt(false)}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="format-btn"
+                        title="Havola qo'shish (Ctrl+K)"
+                        onClick={() => {
+                          setShowLinkPrompt(true);
+                          setShowFormatDropdown(false);
+                        }}
+                      >
+                        <span style={{ fontSize: 13 }}>🔗</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="format-btn bold"
+                        title="Qalin / Bold (Ctrl+B)"
+                        onClick={() => applyFormatting("bold")}
+                      >
+                        B
+                      </button>
+                      <button
+                        type="button"
+                        className="format-btn italic"
+                        title="Qiya / Italic (Ctrl+I)"
+                        onClick={() => applyFormatting("italic")}
+                      >
+                        I
+                      </button>
+                      <div className="format-divider" />
+                      <div style={{ position: "relative" }}>
+                        <button
+                          type="button"
+                          className="format-btn"
+                          style={{ gap: 2, fontSize: 12, fontWeight: 500 }}
+                          title="Boshqa formatlar"
+                          onClick={() => setShowFormatDropdown((prev) => !prev)}
+                        >
+                          Text <span style={{ fontSize: 9 }}>▼</span>
+                        </button>
+                        {showFormatDropdown && (
+                          <div className="format-dropdown-menu">
+                            <button
+                              type="button"
+                              className="format-dropdown-item"
+                              onClick={() => applyFormatting("strike")}
+                            >
+                              <span style={{ textDecoration: "line-through" }}>
+                                Chizilgan (Strike)
+                              </span>
+                              <small
+                                style={{ marginLeft: "auto", opacity: 0.6 }}
+                              >
+                                Ctrl+Shift+X
+                              </small>
+                            </button>
+                            <button
+                              type="button"
+                              className="format-dropdown-item"
+                              onClick={() => applyFormatting("mono")}
+                            >
+                              <code style={{ fontFamily: "monospace" }}>
+                                Monospace
+                              </code>
+                              <small
+                                style={{ marginLeft: "auto", opacity: 0.6 }}
+                              >
+                                Ctrl+Shift+M
+                              </small>
+                            </button>
+                            <button
+                              type="button"
+                              className="format-dropdown-item"
+                              onClick={() => applyFormatting("spoiler")}
+                            >
+                              <span>👁‍🗨 Spoiler</span>
+                              <small
+                                style={{ marginLeft: "auto", opacity: 0.6 }}
+                              >
+                                Ctrl+Shift+P
+                              </small>
+                            </button>
+                            <button
+                              type="button"
+                              className="format-dropdown-item"
+                              onClick={() => applyFormatting("underline")}
+                            >
+                              <span style={{ textDecoration: "underline" }}>
+                                Tagiga chizilgan
+                              </span>
+                              <small
+                                style={{ marginLeft: "auto", opacity: 0.6 }}
+                              >
+                                Ctrl+U
+                              </small>
+                            </button>
+                            <button
+                              type="button"
+                              className="format-dropdown-item"
+                              onClick={() => applyFormatting("quote")}
+                            >
+                              <span>❝ Iqtibos (Quote)</span>
+                            </button>
+                            <div
+                              style={{
+                                height: 1,
+                                background: "rgba(255,255,255,0.1)",
+                                margin: "2px 0",
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="format-dropdown-item"
+                              style={{ color: "var(--danger, #f44336)" }}
+                              onClick={() => applyFormatting("clear")}
+                            >
+                              <span>✕ Tozalash</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
               <textarea
                 ref={textareaRef}
                 rows={1}
@@ -11079,8 +9576,101 @@ function App() {
                 autoCapitalize="none"
                 autoComplete="off"
                 value={messageText}
-                onChange={(event) => handleTextChange(event.target.value)}
+                onSelect={() => {
+                  const ta = textareaRef.current;
+                  if (
+                    ta &&
+                    ta.selectionStart != null &&
+                    ta.selectionEnd != null &&
+                    ta.selectionStart !== ta.selectionEnd
+                  ) {
+                    setShowFormatBar(true);
+                  } else if (!showLinkPrompt) {
+                    setShowFormatBar(false);
+                    setShowFormatDropdown(false);
+                  }
+                }}
+                onMouseUp={() => {
+                  const ta = textareaRef.current;
+                  if (
+                    ta &&
+                    ta.selectionStart != null &&
+                    ta.selectionEnd != null &&
+                    ta.selectionStart !== ta.selectionEnd
+                  ) {
+                    setShowFormatBar(true);
+                  } else if (!showLinkPrompt) {
+                    setShowFormatBar(false);
+                    setShowFormatDropdown(false);
+                  }
+                }}
+                onChange={(event) => {
+                  handleTextChange(event.target.value);
+                  const ta = textareaRef.current;
+                  if (!ta || ta.selectionStart === ta.selectionEnd) {
+                    if (!showLinkPrompt) {
+                      setShowFormatBar(false);
+                      setShowFormatDropdown(false);
+                    }
+                  }
+                }}
                 onKeyDown={(event) => {
+                  // Keyboard shortcuts for formatting
+                  if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+                    const key = event.key.toLowerCase();
+                    const ta = textareaRef.current;
+                    const hasSelection =
+                      ta && ta.selectionStart !== ta.selectionEnd;
+                    if (hasSelection) {
+                      if (key === "b") {
+                        event.preventDefault();
+                        applyFormatting("bold");
+                        return;
+                      }
+                      if (key === "i") {
+                        event.preventDefault();
+                        applyFormatting("italic");
+                        return;
+                      }
+                      if (key === "u") {
+                        event.preventDefault();
+                        applyFormatting("underline");
+                        return;
+                      }
+                      if (key === "k") {
+                        event.preventDefault();
+                        setShowFormatBar(true);
+                        setShowLinkPrompt(true);
+                        return;
+                      }
+                      if (event.shiftKey && (key === "x" || key === "s")) {
+                        event.preventDefault();
+                        applyFormatting("strike");
+                        return;
+                      }
+                      if (event.shiftKey && key === "m") {
+                        event.preventDefault();
+                        applyFormatting("mono");
+                        return;
+                      }
+                      if (event.shiftKey && key === "p") {
+                        event.preventDefault();
+                        applyFormatting("spoiler");
+                        return;
+                      }
+                    }
+                  }
+
+                  if (
+                    event.key === "Escape" &&
+                    (showFormatBar || showFormatDropdown || showLinkPrompt)
+                  ) {
+                    setShowFormatBar(false);
+                    setShowFormatDropdown(false);
+                    setShowLinkPrompt(false);
+                    return;
+                  }
+
                   if (showMentionDropdown && mentionCandidates.length > 0) {
                     if (event.key === "ArrowDown") {
                       event.preventDefault();
@@ -11114,8 +9704,13 @@ function App() {
                   }
                 }}
                 onBlur={() => {
-                  // Small delay so onMouseDown on dropdown fires first
-                  setTimeout(() => setShowMentionDropdown(false), 150);
+                  setTimeout(() => {
+                    setShowMentionDropdown(false);
+                    if (!showLinkPrompt) {
+                      setShowFormatBar(false);
+                      setShowFormatDropdown(false);
+                    }
+                  }, 180);
                 }}
                 onPaste={(event) => {
                   const items = event.clipboardData?.items;
@@ -11165,11 +9760,11 @@ function App() {
               </button>
             )}
           </div>
-          {token && (!networkOnline || !isSocketConnected) && (
+          {token && (!networkOnline || (!isSocketConnected && hasSocketConnectedOnceRef.current)) && (
             <div className="composer-connection-warning">
               {!networkOnline
                 ? "!!! Internet yo'q. Xabar yuborilmaydi."
-                : "⏳ Serverga qayta ulanmoqda..."}
+                : "⏳ Aloqa uzildi, serverga qayta ulanmoqda..."}
             </div>
           )}
         </section>
@@ -11204,10 +9799,6 @@ function App() {
           onClick={() => {
             setMobileBottomTab("profile");
             setShowMyProfile(true);
-            setEditDisplayName(currentUser.displayName);
-            setEditUsername(currentUser.username ?? "");
-            setEditStatusText(currentUser.statusText ?? "");
-            setEditStatusEmoji(currentUser.statusEmoji ?? "");
           }}
         >
           <span>Profile</span>
@@ -11215,1213 +9806,130 @@ function App() {
       </nav>
 
       {/* ── CONTEXT MENU ── */}
-      {contextMenu && (
-        <>
-          <div
-            className="context-menu-backdrop"
-            onClick={() => setContextMenu(null)}
-          />
-          <div
-            className="context-menu"
-            style={{ top: contextMenu.y, left: contextMenu.x }}
-          >
-            <button
-              onClick={() => {
-                togglePin(contextMenu.chatId);
-                setContextMenu(null);
-              }}
-            >
-              {pinnedChats.has(contextMenu.chatId) ? "📌 Unpin" : "📌 Pin"}
-            </button>
-            <button
-              onClick={() => {
-                toggleArchive(contextMenu.chatId);
-                setContextMenu(null);
-              }}
-            >
-              {archivedChats.has(contextMenu.chatId)
-                ? "📦 Unarchive"
-                : "📦 Archive"}
-            </button>
-            {contextMenu.type === "user" && (
-              <button
-                className="context-menu-danger"
-                onClick={async () => {
-                  if (!window.confirm("Chat tarixini butunlay o'chirishni xohlaysizmi?")) {
-                    setContextMenu(null);
-                    return;
-                  }
-                  const menu = contextMenu;
-                  setContextMenu(null);
-                  try {
-                    await api.delete(`/messages/clear/${menu.chatId}`);
-                    if (activeUser?.id === menu.chatId) {
-                      setMessages([]);
-                    }
-                    toast.success("Chat tarixi tozalandi");
-                  } catch (err) {
-                    toast.error("O'chirishda xatolik yuz berdi");
-                  }
-                }}
-              >
-                🧹 Clear chat history
-              </button>
-            )}
-            <button
-              className="context-menu-danger"
-              onClick={async () => {
-                const menu = contextMenu;
-                setContextMenu(null);
-                if (!menu) return;
-                if (menu.type === "group") {
-                  await removeGroupChat(menu.chatId);
-                  return;
-                }
-                removeChat(menu.chatId);
-              }}
-            >
-              {contextMenu.type === "group"
-                ? "🚪 Remove group"
-                : "🗑️ Hide chat"}
-            </button>
-          </div>
-        </>
-      )}
+      <ChatContextMenu
+        contextMenu={contextMenu}
+        onClose={() => setContextMenu(null)}
+        pinnedChats={pinnedChats}
+        archivedChats={archivedChats}
+        onTogglePin={togglePin}
+        onToggleArchive={toggleArchive}
+        onClearHistory={async (chatId) => {
+          try {
+            await api.delete(`/messages/clear/${chatId}`);
+            if (activeUser?.id === chatId) {
+              setMessages([]);
+            }
+            toast.success("Chat tarixi tozalandi");
+          } catch {
+            toast.error("O'chirishda xatolik yuz berdi");
+          }
+        }}
+        onRemoveChat={async (chatId, type) => {
+          if (type === "group") {
+            await removeGroupChat(chatId);
+            return;
+          }
+          removeChat(chatId);
+        }}
+      />
 
       {/* ── MESSAGE CONTEXT MENU ── */}
-      {msgContextMenu && (
-        <>
-          <div
-            className="context-menu-backdrop"
-            onClick={() => setMsgContextMenu(null)}
-          />
-          <div
-            className="context-menu"
-            style={{ top: msgContextMenu.y, left: msgContextMenu.x }}
-          >
-            {msgContextMenu.message.text && (
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(msgContextMenu.message.text!);
-                  setMsgContextMenu(null);
-                  toast.success("Nusxalandi (Copied)");
-                }}
-              >
-                📋 Copy text
-              </button>
-            )}
-            {msgContextMenu.message.fileUrl && (
-              <button
-                onClick={() => {
-                  copyImageToClipboard(
-                    `${API_URL}${msgContextMenu.message.fileUrl}`,
-                  );
-                  setMsgContextMenu(null);
-                }}
-              >
-                📋 Copy image
-              </button>
-            )}
-            <button
-              className="context-menu-danger"
-              onClick={async () => {
-                const id = msgContextMenu.message.id;
-                if (msgContextMenu.isGroup) {
-                  await api
-                    .delete(`/groups/${selectedGroupId}/messages/${id}`)
-                    .catch(() => toast.error("O'chirishda xatolik"));
-                  setGroupMessages((prev) => prev.filter((m) => m.id !== id));
-                } else {
-                  await api
-                    .delete(`/messages/${id}`)
-                    .catch(() => toast.error("O'chirishda xatolik"));
-                  setMessages((prev) => prev.filter((m) => m.id !== id));
-                }
-                setMsgContextMenu(null);
-              }}
-            >
-              🗑️ Delete message
-            </button>
-          </div>
-        </>
-      )}
+      <MessageContextMenu
+        msgContextMenu={msgContextMenu}
+        onClose={() => setMsgContextMenu(null)}
+        onToggleReaction={toggleReaction}
+        onForward={(messageId) => {
+          setSelectedMessageIds(new Set([messageId]));
+          setShowForwardModal(true);
+        }}
+        onDelete={(message, isGroup) => {
+          const isMine = message.senderId === currentUser?.id;
+          const activePartnerName =
+            users.find((u) => u.id === selectedUserId)?.displayName ||
+            "suhbatdosh";
+          setDeleteModalState({
+            isOpen: true,
+            messageIds: [message.id],
+            canDeleteForEveryone: isMine && !isGroup,
+            recipientName: activePartnerName,
+            isGroup,
+          });
+        }}
+        copyImageToClipboard={copyImageToClipboard}
+      />
 
       {/* ── RIGHT SIDEBAR OVERLAY ── */}
-      {rightOpen && (
-        <div
-          className="sidebar-overlay right"
-          onClick={() => setRightOpen(false)}
-        />
-      )}
-      <aside className={`right-panel${rightOpen ? " open" : ""}`}>
-        {chatMode === "user" && activeUser && (
-          <div className="right-profile">
-            {hasUsableAvatar(activeUser.avatarUrl) &&
-            !brokenAvatarIds[activeUser.id] ? (
-              <img
-                src={`${API_URL}${activeUser.avatarUrl}`}
-                alt="Avatar"
-                className="right-profile-avatar-img clickable"
-                onClick={() =>
-                  setLightboxUrl(`${API_URL}${activeUser.avatarUrl}`)
-                }
-                onError={() =>
-                  setBrokenAvatarIds((prev) => ({
-                    ...prev,
-                    [activeUser.id]: true,
-                  }))
-                }
-              />
-            ) : (
-              <div className="right-profile-avatar">
-                {getInitialLetter(activeUser.displayName)}
-              </div>
-            )}
-            <h3>{activeUser.displayName}</h3>
-            {activeUser.username && (
-              <span className="right-profile-username">
-                @{activeUser.username}
-              </span>
-            )}
-            <small>
-              {activeUser.isOnline
-                ? "🟢 Online"
-                : formatLastSeen(activeUser.lastSeenAt)}
-            </small>
-          </div>
-        )}
+      <RightPanel
+        isOpen={rightOpen}
+        onClose={() => setRightOpen(false)}
+        chatMode={chatMode}
+        activeUser={activeUser}
+        activeGroup={activeGroup}
+        currentUser={currentUser}
+        users={users}
+        brokenAvatarIds={brokenAvatarIds}
+        setBrokenAvatarIds={setBrokenAvatarIds}
+        setLightboxUrl={setLightboxUrl}
+        setProfileViewUser={setProfileViewUser}
+        canManageGroupMembers={canManageGroupMembers}
+        canAssignGroupAdmins={canAssignGroupAdmins}
+        myGroupRole={myGroupRole}
+        setShowEditGroup={setShowEditGroup}
+        setShowAddGroupMembers={setShowAddGroupMembers}
+        setAddMemberIds={setAddMemberIds}
+        removeGroupAvatar={removeGroupAvatar}
+        handleGroupAvatarChange={handleGroupAvatarChange}
+        updateGroupMemberRole={updateGroupMemberRole}
+        kickGroupMember={kickGroupMember}
+        setShowSettings={setShowSettings}
+        callStatus={callStatus}
+        incomingCall={incomingCall}
+        acceptCall={acceptCall}
+        declineCall={declineCall}
+      />
 
-        {chatMode === "group" && activeGroup && (
-          <>
-            <div className="right-profile">
-              {activeGroup.avatarUrl ? (
-                <img
-                  src={normalizeFileUrl(activeGroup.avatarUrl) ?? ""}
-                  alt="Group avatar"
-                  className="right-profile-avatar-img clickable"
-                  onClick={() => {
-                    const imageUrl = normalizeFileUrl(activeGroup.avatarUrl);
-                    if (imageUrl) setLightboxUrl(imageUrl);
-                  }}
-                />
-              ) : (
-                <div className="right-profile-avatar group-avatar">
-                  {activeGroup.name.charAt(0).toUpperCase()}
-                </div>
-              )}
-              <h3>{activeGroup.name}</h3>
-              <small>
-                {activeGroup._count?.members ??
-                  activeGroup.members?.length ??
-                  0}{" "}
-                members
-              </small>
-            </div>
-            {canManageGroupMembers && (
-              <div className="right-section">
-                <h4>Group management</h4>
-                <button
-                  className="action-btn"
-                  onClick={() => setShowEditGroup(true)}
-                >
-                  ✏️ Edit group name
-                </button>
-                <button
-                  className="action-btn"
-                  onClick={() => groupAvatarInputRef.current?.click()}
-                >
-                  🖼️ Change group photo
-                </button>
-                {activeGroup.avatarUrl && (
-                  <button
-                    className="action-btn"
-                    onClick={() => {
-                      void removeGroupAvatar();
-                    }}
-                  >
-                    🗑️ Remove group photo
-                  </button>
-                )}
-                <input
-                  ref={groupAvatarInputRef}
-                  type="file"
-                  accept="image/*"
-                  style={{ display: "none" }}
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (file) {
-                      void handleGroupAvatarChange(file);
-                    }
-                    event.target.value = "";
-                  }}
-                />
-              </div>
-            )}
-            <div className="right-section">
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginBottom: 8,
-                }}
-              >
-                <h4 style={{ margin: 0 }}>Members</h4>
-                <button
-                  className="btn-primary"
-                  style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6 }}
-                  onClick={() => {
-                    setShowAddGroupMembers(true);
-                    setAddMemberIds([]);
-                  }}
-                  disabled={!canManageGroupMembers}
-                >
-                  + Add
-                </button>
-              </div>
-              {activeGroup.members?.map((m) => (
-                <div
-                  key={m.id}
-                  className="group-member-row clickable"
-                  onClick={() => {
-                    if (m.user) setProfileViewUser(m.user);
-                  }}
-                >
-                  {m.user?.avatarUrl ? (
-                    <img
-                      src={`${API_URL}${m.user.avatarUrl}`}
-                      alt=""
-                      className="group-member-avatar-img"
-                    />
-                  ) : (
-                    <div
-                      className="user-avatar"
-                      style={{ width: 32, height: 32, fontSize: 12 }}
-                    >
-                      {m.user?.displayName?.charAt(0).toUpperCase() ?? "?"}
-                    </div>
-                  )}
-                  <span>{m.user?.displayName ?? m.userId}</span>
-                  {m.role === "OWNER" && (
-                    <small className="badge-owner">Owner</small>
-                  )}
-                  {m.role === "ADMIN" && (
-                    <small className="badge-on">Admin</small>
-                  )}
-                  {m.role === "MEMBER" && (
-                    <small className="badge-member">Member</small>
-                  )}
-                  {(canAssignGroupAdmins || canManageGroupMembers) &&
-                    currentUser?.id !== m.userId && (
-                      <div
-                        className="group-member-actions"
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        {canAssignGroupAdmins && m.role !== "OWNER" && (
-                          <button
-                            className="member-action-btn"
-                            onClick={() =>
-                              void updateGroupMemberRole(
-                                m.userId,
-                                m.role === "ADMIN" ? "MEMBER" : "ADMIN",
-                              )
-                            }
-                          >
-                            {m.role === "ADMIN" ? "Revoke admin" : "Make admin"}
-                          </button>
-                        )}
-                        {((myGroupRole === "OWNER" && m.role !== "OWNER") ||
-                          (myGroupRole === "ADMIN" && m.role === "MEMBER")) && (
-                          <button
-                            className="member-action-btn danger"
-                            onClick={() => void kickGroupMember(m.userId)}
-                          >
-                            Kick
-                          </button>
-                        )}
-                      </div>
-                    )}
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-
-        <div className="right-section">
-          <h4>Security</h4>
-          <div className="security-row">
-            <span>Two-Factor Auth</span>
-            {currentUser.isTwoFAEnabled ? (
-              <span className="badge-on">Enabled</span>
-            ) : (
-              <span className="badge-off">Disabled</span>
-            )}
-          </div>
-          <button
-            className="action-btn"
-            onClick={() => {
-              setShowSettings(true);
-              setRightOpen(false);
-            }}
-          >
-            ⚙️ Open Settings
-          </button>
-        </div>
-
-        {callStatus === "ringing" && incomingCall && (
-          <div className="right-section">
-            <div className="incoming-call">
-              <p>📞 Incoming call</p>
-              <div className="call-buttons">
-                <button className="accept-btn" onClick={acceptCall}>
-                  Accept
-                </button>
-                <button className="decline-btn" onClick={declineCall}>
-                  Decline
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </aside>
-
-      {callStatus === "in-call" && (
-        <>
-          {/* Minimized call strip - centered, not blocking edges */}
-          {callMinimized && (
-            <div
-              style={{
-                position: "fixed",
-                top: 84,
-                left: isMobileViewport
-                  ? "50%"
-                  : `calc(${sidebarWidth}px + 4px + (100vw - ${sidebarWidth}px - 4px) / 2)`,
-                transform: "translateX(-50%)",
-                background: "var(--bg)",
-                padding: "5px 18px",
-                borderRadius: "10px",
-                border: "1px solid var(--line)",
-                zIndex: 9990,
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                boxShadow: "0 3px 10px rgba(0,0,0,0.25)",
-                whiteSpace: "nowrap",
-                maxWidth: "calc(100vw - 24px)",
-              }}
-            >
-              <span style={{ fontSize: 14 }}>📞</span>
-              <span
-                style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  background: "#4caf50",
-                  animation: "pulse 1.5s infinite",
-                }}
-              />
-              <span
-                style={{
-                  fontSize: 12,
-                  color: "var(--text)",
-                  fontFamily: "monospace",
-                  fontWeight: 600,
-                }}
-              >
-                {formatCallDuration(callStats.durationSec)}
-              </span>
-              <span
-                style={{
-                  fontSize: 11,
-                  color: "var(--text-muted)",
-                  fontFamily: "monospace",
-                }}
-              >
-                ⬆{callStats.upKbps.toFixed(0)}/⬇{callStats.downKbps.toFixed(0)}{" "}
-                kbps{callStats.rttMs != null ? ` · ${callStats.rttMs}ms` : ""}
-              </span>
-              {callGroupIdRef.current && groupCallParticipants.length > 0 && (
-                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                  {groupCallParticipants.length} kishi
-                  {groupCallParticipants.some((p) => p.speaking) && " • 🎤"}
-                </span>
-              )}
-              <button
-                style={{
-                  padding: "3px 10px",
-                  background: "var(--primary)",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                  fontSize: 12,
-                }}
-                onClick={() => setCallMinimized(false)}
-              >
-                Open
-              </button>
-              <button
-                style={{
-                  padding: "3px 10px",
-                  background: callMicMuted
-                    ? "var(--danger)"
-                    : "var(--panel-hover)",
-                  color: callMicMuted ? "#fff" : "var(--text)",
-                  border: "1px solid var(--line)",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                  fontSize: 12,
-                }}
-                onClick={toggleCallMicMute}
-                title={callMicMuted ? "Unmute mic" : "Mute mic"}
-              >
-                {callMicMuted ? "Unmute" : "Mute"}
-              </button>
-              <button
-                style={{
-                  padding: "3px 10px",
-                  background: "var(--danger)",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                  fontSize: 12,
-                }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  stopCall(false);
-                }}
-              >
-                End
-              </button>
-            </div>
-          )}
-
-          {/* Full call overlay - always mounted for video refs */}
-          <div
-            className="in-call-overlay"
-            style={{
-              position: "fixed",
-              bottom: 20,
-              right: 20,
-              width: 340,
-              background: "var(--bg-card)",
-              borderRadius: 12,
-              padding: 16,
-              border: "1px solid var(--line)",
-              zIndex: 9999,
-              display: callMinimized ? "none" : "flex",
-              flexDirection: "column",
-              gap: 12,
-              boxShadow: "0 8px 24px rgba(0,0,0,0.3)",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-              }}
-            >
-              <strong style={{ color: "var(--text)" }}>Call in progress</strong>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ color: "var(--primary)", fontSize: 13 }}>
-                  {formatCallDuration(callStats.durationSec)}
-                </span>
-                <button
-                  onClick={() => setCallMinimized(true)}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    color: "var(--text-muted)",
-                    cursor: "pointer",
-                    fontSize: 18,
-                    lineHeight: 1,
-                    padding: "0 2px",
-                  }}
-                  title="Close"
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-
-            {/* ── CALL STATS BAR ── */}
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 4,
-                padding: "6px 8px",
-                background: "rgba(0,0,0,0.15)",
-                borderRadius: 6,
-                fontSize: 11,
-                color: "var(--text-muted)",
-                fontFamily: "monospace",
-              }}
-            >
-              <span>⬆ {callStats.upKbps.toFixed(1)} kbps</span>
-              <span>⬇ {callStats.downKbps.toFixed(1)} kbps</span>
-              <span>
-                RTT: {callStats.rttMs != null ? `${callStats.rttMs} ms` : "--"}
-              </span>
-              <span>
-                Loss:{" "}
-                {callStats.lossPct != null
-                  ? `${callStats.lossPct.toFixed(2)}%`
-                  : "--"}
-              </span>
-              <span>
-                Jitter:{" "}
-                {callStats.jitterMs != null ? `${callStats.jitterMs} ms` : "--"}
-              </span>
-              <span>Codec: {callStats.codec ?? "--"}</span>
-              <span
-                style={{
-                  color:
-                    callStats.iceState === "connected" ||
-                    callStats.iceState === "completed"
-                      ? "#4caf50"
-                      : callStats.iceState === "failed"
-                        ? "#f44336"
-                        : "#ff9800",
-                }}
-              >
-                ICE: {callStats.iceState}
-              </span>
-              <span
-                style={{
-                  color:
-                    callStats.connState === "connected"
-                      ? "#4caf50"
-                      : callStats.connState === "failed"
-                        ? "#f44336"
-                        : "#ff9800",
-                }}
-              >
-                Conn: {callStats.connState}
-              </span>
-            </div>
-            {callStats.bytesSentTotal === 0 && callStats.durationSec > 5 && (
-              <div
-                style={{
-                  padding: "6px 8px",
-                  background: "rgba(244,67,54,0.15)",
-                  border: "1px solid rgba(244,67,54,0.4)",
-                  borderRadius: 6,
-                  fontSize: 11,
-                  color: "#f44336",
-                }}
-              >
-                ⚠ Hech qanday audio jonatilmayapti! Mikrofon yoki ICE muammosi.
-              </div>
-            )}
-            {(callStats.iceState === "failed" ||
-              callStats.connState === "failed") && (
-              <div
-                style={{
-                  padding: "6px 8px",
-                  background: "rgba(244,67,54,0.15)",
-                  border: "1px solid rgba(244,67,54,0.4)",
-                  borderRadius: 6,
-                  fontSize: 11,
-                  color: "#f44336",
-                }}
-              >
-                ⚠ ICE/Conn FAILED — TURN server yoki tarmoq muammosi.
-              </div>
-            )}
-
-            {/* ── LIVE EVENT LOG ── */}
-            {callEvents.length > 0 && (
-              <details
-                style={{
-                  background: "rgba(0,0,0,0.35)",
-                  border: "1px solid var(--border)",
-                  borderRadius: 6,
-                  padding: "4px 6px",
-                }}
-              >
-                <summary
-                  style={{
-                    fontSize: 11,
-                    color: "var(--text-muted)",
-                    cursor: "pointer",
-                    userSelect: "none",
-                  }}
-                >
-                  📜 Event log ({callEvents.length})
-                </summary>
-                <div
-                  style={{
-                    marginTop: 6,
-                    maxHeight: 140,
-                    overflowY: "auto",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 2,
-                    fontFamily: "monospace",
-                    fontSize: 10,
-                  }}
-                >
-                  {callEvents
-                    .slice()
-                    .reverse()
-                    .map((ev, i) => {
-                      const color =
-                        ev.level === "ok"
-                          ? "#4caf50"
-                          : ev.level === "warn"
-                            ? "#ff9800"
-                            : ev.level === "err"
-                              ? "#f44336"
-                              : "var(--text-muted)";
-                      const time = new Date(ev.t).toLocaleTimeString("en-GB", {
-                        hour12: false,
-                      });
-                      return (
-                        <div
-                          key={`${ev.t}-${i}`}
-                          style={{ color, lineHeight: 1.3 }}
-                        >
-                          <span style={{ opacity: 0.6 }}>{time.slice(3)}</span>{" "}
-                          {ev.msg}
-                        </div>
-                      );
-                    })}
-                </div>
-              </details>
-            )}
-
-            {/* ── GROUP CALL PARTICIPANTS LIST ── */}
-            {callGroupIdRef.current && groupCallParticipants.length > 0 && (
-              <div
-                style={{
-                  maxHeight: 200,
-                  overflowY: "auto",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 6,
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: 11,
-                    color: "var(--text-muted)",
-                    fontWeight: 600,
-                    marginBottom: 2,
-                  }}
-                >
-                  Ishtirokchilar ({groupCallParticipants.length})
-                </div>
-                {groupCallParticipants.map((p) => {
-                  const isMe = p.userId === currentUser?.id;
-                  const u = isMe
-                    ? currentUser
-                    : users.find((x) => x.id === p.userId);
-                  const vol = participantVolumes[p.userId] ?? 100;
-                  const latencyMs = participantLatencyMs[p.userId];
-                  const latencyLabel = isMe
-                    ? "local"
-                    : typeof latencyMs === "number"
-                      ? `${latencyMs}ms`
-                      : "--";
-
-                  return (
-                    <div
-                      key={p.userId}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        padding: "4px 6px",
-                        borderRadius: 8,
-                        background: p.speaking
-                          ? "rgba(76,175,80,0.12)"
-                          : "transparent",
-                        border: p.speaking
-                          ? "1px solid rgba(76,175,80,0.3)"
-                          : "1px solid transparent",
-                        transition: "all 0.2s",
-                      }}
-                    >
-                      <div style={{ position: "relative", flexShrink: 0 }}>
-                        {u?.avatarUrl ? (
-                          <img
-                            src={`${API_URL}${u.avatarUrl}`}
-                            alt=""
-                            style={{
-                              width: 28,
-                              height: 28,
-                              borderRadius: "50%",
-                              objectFit: "cover",
-                              border: p.speaking
-                                ? "2px solid #4caf50"
-                                : "2px solid transparent",
-                              transition: "border 0.2s",
-                            }}
-                          />
-                        ) : (
-                          <div
-                            style={{
-                              width: 28,
-                              height: 28,
-                              borderRadius: "50%",
-                              background: "var(--primary)",
-                              color: "#fff",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              fontSize: 12,
-                              fontWeight: 700,
-                              border: p.speaking
-                                ? "2px solid #4caf50"
-                                : "2px solid transparent",
-                              transition: "border 0.2s",
-                            }}
-                          >
-                            {(u?.displayName ?? "?").charAt(0).toUpperCase()}
-                          </div>
-                        )}
-                        {p.speaking && (
-                          <span
-                            style={{
-                              position: "absolute",
-                              bottom: -2,
-                              right: -2,
-                              width: 10,
-                              height: 10,
-                              borderRadius: "50%",
-                              background: "#4caf50",
-                              border: "2px solid var(--bg-card)",
-                              animation: "pulse 1s infinite",
-                            }}
-                          />
-                        )}
-                      </div>
-                      <div
-                        style={{
-                          minWidth: 0,
-                          flex: 1,
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 3,
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                            gap: 8,
-                          }}
-                        >
-                          <span
-                            style={{
-                              fontSize: 12,
-                              fontWeight: 600,
-                              color: "var(--text)",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {u?.displayName ?? "Unknown"}
-                            {isMe ? " (me)" : ""}
-                          </span>
-                          <span
-                            style={{
-                              fontSize: 10,
-                              color: "var(--text-muted)",
-                              fontFamily: "monospace",
-                              flexShrink: 0,
-                            }}
-                          >
-                            {latencyLabel}
-                          </span>
-                        </div>
-                        <input
-                          type="range"
-                          min="0"
-                          max="200"
-                          value={vol}
-                          onChange={(e) => {
-                            const nextVolume = Number(e.target.value);
-                            setParticipantVolumes((prev) => {
-                              const next = { ...prev, [p.userId]: nextVolume };
-                              localStorage.setItem(
-                                "participant_volumes",
-                                JSON.stringify(next),
-                              );
-                              return next;
-                            });
-                          }}
-                          style={{
-                            width: 60,
-                            height: 4,
-                            accentColor: "var(--primary)",
-                            cursor: "pointer",
-                          }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            <div
-              style={{
-                position: "relative",
-                width: "100%",
-                borderRadius: 8,
-                overflow: "hidden",
-                background: "#000",
-                minHeight: 180,
-                cursor:
-                  (remoteVideoRef.current?.srcObject as MediaStream | null)
-                    ?.getVideoTracks()
-                    .some((track) => track.readyState === "live") ||
-                  isRemoteScreenSharing
-                    ? "pointer"
-                    : "default",
-              }}
-              onClick={() => {
-                const remoteStream = remoteVideoRef.current
-                  ?.srcObject as MediaStream | null;
-                const hasRemoteVideo = !!remoteStream
-                  ?.getVideoTracks()
-                  .some((track) => track.readyState === "live");
-                if (isRemoteScreenSharing || hasRemoteVideo) {
-                  setScreenFullscreen(true);
-                }
-              }}
-              title={isRemoteScreenSharing ? "Katta qilish" : ""}
-            >
-              <video
-                ref={remoteVideoRef}
-                autoPlay
-                playsInline
-                style={{ width: "100%", height: "100%", objectFit: "cover" }}
-              />
-              <video
-                ref={localVideoRef}
-                autoPlay
-                playsInline
-                muted
-                onClick={(e) => {
-                  if (isScreenSharing) {
-                    e.stopPropagation();
-                    setLocalScreenFullscreen(true);
-                  }
-                }}
-                style={{
-                  width: 100,
-                  position: "absolute",
-                  bottom: 10,
-                  right: 10,
-                  borderRadius: 6,
-                  border: "2px solid var(--primary)",
-                  background: "#000",
-                  objectFit: "cover",
-                  display: isScreenSharing ? "block" : "none",
-                  cursor: isScreenSharing ? "pointer" : "default",
-                }}
-              />
-              {isScreenSharing && (
-                <div
-                  style={{
-                    position: "absolute",
-                    bottom: 6,
-                    right: 6,
-                    background: "rgba(0,0,0,0.6)",
-                    color: "#fff",
-                    padding: "2px 8px",
-                    borderRadius: 4,
-                    fontSize: 11,
-                    pointerEvents: "none",
-                  }}
-                >
-                  ⛶ Katta qilish
-                </div>
-              )}
-              {isRemoteScreenSharing && (
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 6,
-                    right: 6,
-                    background: "rgba(0,0,0,0.6)",
-                    color: "#fff",
-                    padding: "2px 8px",
-                    borderRadius: 4,
-                    fontSize: 11,
-                  }}
-                >
-                  ⛶ Katta qilish
-                </div>
-              )}
-            </div>
-
-            <div style={{ display: "flex", gap: 10 }}>
-              <button
-                style={{
-                  flex: 1,
-                  padding: "10px 0",
-                  background: callMicMuted
-                    ? "var(--danger)"
-                    : "var(--panel-hover)",
-                  color: callMicMuted ? "#fff" : "var(--text)",
-                  border: "1px solid var(--line)",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                }}
-                onClick={toggleCallMicMute}
-              >
-                {callMicMuted ? "Unmute" : "Mute"}
-              </button>
-              <button
-                style={{
-                  flex: 1,
-                  padding: "10px 0",
-                  background: isScreenSharing
-                    ? "var(--danger)"
-                    : "var(--primary)",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                }}
-                onClick={toggleScreenShare}
-              >
-                {isScreenSharing ? "Stop sharing" : "Share screen"}
-              </button>
-              <button
-                style={{
-                  flex: 1,
-                  padding: "10px 0",
-                  background: "var(--danger)",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                }}
-                onClick={() => stopCall(false)}
-              >
-                End call
-              </button>
-            </div>
-          </div>
-        </>
-      )}
+      {/* ── CALL OVERLAY & SCREENSHARE ── */}
+      <CallOverlay
+        callStatus={callStatus}
+        callMinimized={callMinimized}
+        setCallMinimized={setCallMinimized}
+        isMobileViewport={isMobileViewport}
+        sidebarWidth={sidebarWidth}
+        callStats={callStats}
+        isSocketConnected={isSocketConnected}
+        networkOnline={networkOnline}
+        callGroupId={callGroupIdRef.current}
+        groupCallParticipants={groupCallParticipants}
+        callMicMuted={callMicMuted}
+        toggleCallMicMute={toggleCallMicMute}
+        stopCall={stopCall}
+        callEvents={callEvents}
+        currentUser={currentUser}
+        users={users}
+        micVolume={micVolume}
+        setMicVolume={setMicVolume}
+        participantVolumes={participantVolumes}
+        setParticipantVolumes={setParticipantVolumes}
+        participantLatencyMs={participantLatencyMs}
+        brokenAvatarIds={brokenAvatarIds}
+        setBrokenAvatarIds={setBrokenAvatarIds}
+        micGainNodeRef={micGainNodeRef}
+        groupAudioNodesRef={groupAudioNodesRef}
+        groupAudioContextRef={groupAudioContextRef}
+        remoteVideoRef={remoteVideoRef}
+        localVideoRef={localVideoRef}
+        localScreenStreamRef={localScreenStreamRef}
+        isScreenSharing={isScreenSharing}
+        isRemoteScreenSharing={isRemoteScreenSharing}
+        toggleScreenShare={toggleScreenShare}
+        screenFullscreen={screenFullscreen}
+        setScreenFullscreen={setScreenFullscreen}
+        localScreenFullscreen={localScreenFullscreen}
+        setLocalScreenFullscreen={setLocalScreenFullscreen}
+      />
 
       <audio ref={remoteAudioRef} autoPlay />
 
-      {/* Dark notification bar when local user is sharing screen */}
-      {isScreenSharing && callStatus === "in-call" && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            zIndex: 100000,
-            display: "flex",
-            justifyContent: "center",
-            pointerEvents: "none",
-          }}
-        >
-          <div
-            style={{
-              background: "rgba(0,0,0,0.85)",
-              color: "#fff",
-              padding: "8px 20px",
-              borderRadius: "0 0 12px 12px",
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              pointerEvents: "auto",
-              boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
-              backdropFilter: "blur(8px)",
-            }}
-          >
-            <span style={{ fontSize: 14 }}>🖥️</span>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>
-              Ekran ulashilmoqda
-            </span>
-            <button
-              onClick={toggleScreenShare}
-              style={{
-                padding: "4px 14px",
-                background: "var(--danger)",
-                color: "#fff",
-                border: "none",
-                borderRadius: 6,
-                cursor: "pointer",
-                fontWeight: 600,
-                fontSize: 12,
-              }}
-            >
-              To'xtatish
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Fullscreen local screenshare overlay */}
-      {localScreenFullscreen && isScreenSharing && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 99999,
-            background: "#000",
-            display: "flex",
-            flexDirection: "column",
-          }}
-        >
-          <video
-            autoPlay
-            playsInline
-            muted
-            ref={(el) => {
-              if (el && localScreenStreamRef.current) {
-                el.srcObject = localScreenStreamRef.current;
-              }
-            }}
-            style={{
-              flex: 1,
-              width: "100%",
-              height: "100%",
-              objectFit: "contain",
-              background: "#000",
-            }}
-          />
-          <div
-            style={{
-              position: "absolute",
-              top: 12,
-              right: 12,
-              display: "flex",
-              gap: 8,
-            }}
-          >
-            <button
-              onClick={() => setLocalScreenFullscreen(false)}
-              style={{
-                padding: "8px 16px",
-                background: "rgba(255,255,255,0.15)",
-                color: "#fff",
-                border: "1px solid rgba(255,255,255,0.3)",
-                borderRadius: 8,
-                cursor: "pointer",
-                fontWeight: 600,
-                fontSize: 14,
-                backdropFilter: "blur(8px)",
-              }}
-            >
-              ✕ Yopish
-            </button>
-            <button
-              onClick={toggleScreenShare}
-              style={{
-                padding: "8px 16px",
-                background: "var(--danger)",
-                color: "#fff",
-                border: "none",
-                borderRadius: 8,
-                cursor: "pointer",
-                fontWeight: 600,
-                fontSize: 14,
-              }}
-            >
-              To'xtatish
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Fullscreen screenshare overlay */}
-      {screenFullscreen &&
-        ((remoteVideoRef.current?.srcObject as MediaStream | null)
-          ?.getVideoTracks()
-          .some((track) => track.readyState === "live") ||
-          isRemoteScreenSharing) && (
-          <div
-            style={{
-              position: "fixed",
-              inset: 0,
-              zIndex: 99999,
-              background: "#000",
-              display: "flex",
-              flexDirection: "column",
-            }}
-          >
-            <video
-              autoPlay
-              playsInline
-              ref={(el) => {
-                if (el && remoteVideoRef.current) {
-                  el.srcObject = remoteVideoRef.current.srcObject;
-                }
-              }}
-              style={{
-                flex: 1,
-                width: "100%",
-                height: "100%",
-                objectFit: "contain",
-                background: "#000",
-              }}
-            />
-            <div
-              style={{
-                position: "absolute",
-                top: 12,
-                right: 12,
-                display: "flex",
-                gap: 8,
-              }}
-            >
-              <button
-                onClick={() => setScreenFullscreen(false)}
-                style={{
-                  padding: "8px 16px",
-                  background: "rgba(255,255,255,0.15)",
-                  color: "#fff",
-                  border: "1px solid rgba(255,255,255,0.3)",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                  fontSize: 14,
-                  backdropFilter: "blur(8px)",
-                }}
-              >
-                ✕ Yopish
-              </button>
-              <button
-                onClick={() => stopCall(false)}
-                style={{
-                  padding: "8px 16px",
-                  background: "var(--danger)",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                  fontSize: 14,
-                }}
-              >
-                End call
-              </button>
-            </div>
-          </div>
-        )}
 
       {lightboxUrl && (
         <div className="lightbox-overlay" onClick={() => setLightboxUrl(null)}>
@@ -12451,260 +9959,59 @@ function App() {
       )}
 
       {/* ── CREATE GROUP DIALOG ── */}
+      <CreateGroupModal
+        isOpen={showCreateGroup}
+        onClose={() => setShowCreateGroup(false)}
+        newGroupName={newGroupName}
+        setNewGroupName={setNewGroupName}
+        users={users}
+        newGroupMembers={newGroupMembers}
+        setNewGroupMembers={setNewGroupMembers}
+        onCreateGroup={createGroup}
+      />
 
-      {showCreateGroup && (
-        <div
-          className="lightbox-overlay"
-          onClick={() => setShowCreateGroup(false)}
-        >
-          <div
-            className="create-group-dialog"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3>Create New Group</h3>
-            <input
-              type="text"
-              placeholder="Group name"
-              value={newGroupName}
-              onChange={(e) => setNewGroupName(e.target.value)}
-              autoFocus
-            />
-            <div className="group-member-select">
-              <h4>Select members:</h4>
-              {users.map((user) => (
-                <label key={user.id} className="group-member-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={newGroupMembers.includes(user.id)}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setNewGroupMembers([...newGroupMembers, user.id]);
-                      } else {
-                        setNewGroupMembers(
-                          newGroupMembers.filter((id) => id !== user.id),
-                        );
-                      }
-                    }}
-                  />
-                  <span>{user.displayName}</span>
-                </label>
-              ))}
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button
-                className="btn-primary"
-                style={{ flex: 1, padding: 10, borderRadius: 10 }}
-                onClick={createGroup}
-              >
-                Create ({newGroupMembers.length} members)
-              </button>
-              <button
-                style={{
-                  flex: 1,
-                  padding: 10,
-                  borderRadius: 10,
-                  border: "1px solid var(--line)",
-                }}
-                onClick={() => setShowCreateGroup(false)}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <EditGroupModal
+        isOpen={showEditGroup && Boolean(activeGroup)}
+        onClose={() => setShowEditGroup(false)}
+        editGroupName={editGroupName}
+        setEditGroupName={setEditGroupName}
+        onSaveGroupName={saveGroupName}
+      />
 
-      {showEditGroup && activeGroup && (
-        <div
-          className="lightbox-overlay"
-          onClick={() => setShowEditGroup(false)}
-        >
-          <div
-            className="create-group-dialog"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3>Edit Group</h3>
-            <input
-              type="text"
-              placeholder="Group name"
-              value={editGroupName}
-              onChange={(e) => setEditGroupName(e.target.value)}
-              autoFocus
-              maxLength={100}
-            />
-            <div style={{ display: "flex", gap: 8 }}>
-              <button
-                className="btn-primary"
-                style={{ flex: 1, padding: 10, borderRadius: 10 }}
-                onClick={() => void saveGroupName()}
-              >
-                Save
-              </button>
-              <button
-                style={{
-                  flex: 1,
-                  padding: 10,
-                  borderRadius: 10,
-                  border: "1px solid var(--line)",
-                }}
-                onClick={() => setShowEditGroup(false)}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── ADD MEMBERS DIALOG ── */}
-      {showAddGroupMembers && activeGroup && (
-        <div
-          className="lightbox-overlay"
-          onClick={() => setShowAddGroupMembers(false)}
-        >
-          <div
-            className="create-group-dialog"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3>Add Members to {activeGroup.name}</h3>
-            <div className="group-member-select">
-              {users
-                .filter(
-                  (u) => !activeGroup.members?.some((m) => m.userId === u.id),
-                )
-                .map((user) => (
-                  <label key={user.id} className="group-member-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={addMemberIds.includes(user.id)}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setAddMemberIds([...addMemberIds, user.id]);
-                        } else {
-                          setAddMemberIds(
-                            addMemberIds.filter((id) => id !== user.id),
-                          );
-                        }
-                      }}
-                    />
-                    {user.avatarUrl ? (
-                      <img
-                        src={`${API_URL}${user.avatarUrl}`}
-                        alt=""
-                        style={{
-                          width: 24,
-                          height: 24,
-                          borderRadius: "50%",
-                          objectFit: "cover",
-                        }}
-                      />
-                    ) : (
-                      <div
-                        className="user-avatar"
-                        style={{ width: 24, height: 24, fontSize: 10 }}
-                      >
-                        {user.displayName.charAt(0).toUpperCase()}
-                      </div>
-                    )}
-                    <span>{user.displayName}</span>
-                  </label>
-                ))}
-              {users.filter(
-                (u) => !activeGroup.members?.some((m) => m.userId === u.id),
-              ).length === 0 && (
-                <p style={{ color: "var(--text-muted)", textAlign: "center" }}>
-                  No users available to add
-                </p>
-              )}
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button
-                className="btn-primary"
-                style={{ flex: 1, padding: 10, borderRadius: 10 }}
-                onClick={addMembersToGroup}
-              >
-                Add ({addMemberIds.length})
-              </button>
-              <button
-                style={{
-                  flex: 1,
-                  padding: 10,
-                  borderRadius: 10,
-                  border: "1px solid var(--line)",
-                }}
-                onClick={() => setShowAddGroupMembers(false)}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <AddMembersModal
+        isOpen={showAddGroupMembers && Boolean(activeGroup)}
+        onClose={() => setShowAddGroupMembers(false)}
+        activeGroup={activeGroup}
+        users={users}
+        addMemberIds={addMemberIds}
+        setAddMemberIds={setAddMemberIds}
+        brokenAvatarIds={brokenAvatarIds}
+        setBrokenAvatarIds={setBrokenAvatarIds}
+        onAddMembers={addMembersToGroup}
+      />
 
       {/* ── AUTO-UPDATE DIALOG ── */}
       {updateAvailable && (
-        <div
-          className="lightbox-overlay"
-          onClick={() => setUpdateAvailable(null)}
-        >
-          <div
-            className="create-group-dialog update-dialog"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="update-dialog-header">
-              <span className="update-dialog-icon">🔄</span>
-              <h3>New version available!</h3>
-              <p>
-                Version <strong>{updateAvailable.newVersion}</strong> is ready
-                to download
-              </p>
-              {updateAvailable.notes && (
-                <p className="update-dialog-notes">{updateAvailable.notes}</p>
-              )}
-            </div>
-            <div className="update-dialog-actions">
-              <button
-                className="btn-primary update-dialog-primary-btn"
-                disabled={isUpdating}
-                onClick={() => {
-                  void handleUpdateInstall(updateAvailable.newVersion);
-                }}
-              >
-                {isUpdating ? "Downloading..." : updateActionLabel}
-              </button>
-              <div className="update-progress-panel">
-                <div className="update-progress-head">
-                  <span>Download progress</span>
-                  <strong>{updateProgress}%</strong>
-                </div>
-                <div className="update-progress-track" aria-hidden="true">
-                  <div
-                    className="update-progress-fill"
-                    style={{
-                      width: `${updateProgress}%`,
-                      animation: isUpdating
-                        ? "update-flow 1.15s linear infinite"
-                        : "none",
-                    }}
-                  />
-                </div>
-                <div className="update-progress-foot">
-                  <span>0%</span>
-                  <span>{updateSpeedLabel || "Waiting..."}</span>
-                  <span>100%</span>
-                </div>
-              </div>
-              <button
-                className="update-dialog-secondary-btn"
-                onClick={() => setUpdateAvailable(null)}
-                disabled={isUpdating}
-              >
-                Later
-              </button>
-            </div>
-          </div>
-        </div>
+        <UpdateModal
+          updateAvailable={updateAvailable}
+          onClose={() => setUpdateAvailable(null)}
+          onInstall={handleUpdateInstall}
+          isUpdating={isUpdating}
+          updateActionLabel={updateActionLabel}
+          updateProgress={updateProgress}
+          updateSpeedLabel={updateSpeedLabel}
+        />
       )}
+
+      {/* ── TELEGRAM STYLE DELETE CONFIRM MODAL ── */}
+      <DeleteConfirmModal
+        isOpen={Boolean(deleteModalState?.isOpen)}
+        onClose={() => setDeleteModalState(null)}
+        onConfirm={handleConfirmDelete}
+        canDeleteForEveryone={Boolean(deleteModalState?.canDeleteForEveryone)}
+        recipientName={deleteModalState?.recipientName}
+        messageCount={deleteModalState?.messageIds.length || 1}
+      />
     </div>
   );
 }
@@ -12729,1692 +10036,5 @@ function silentCallCleanup(
   localScreenStreamRef.current = null;
 }
 
-function formatLastSeen(lastSeenAt?: string | null) {
-  if (!lastSeenAt) {
-    return "offline";
-  }
-
-  const seenAt = new Date(lastSeenAt);
-  if (Number.isNaN(seenAt.getTime())) {
-    return "offline";
-  }
-
-  const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const seenStart = new Date(
-    seenAt.getFullYear(),
-    seenAt.getMonth(),
-    seenAt.getDate(),
-  );
-  const dayDiff = Math.round(
-    (todayStart.getTime() - seenStart.getTime()) / 86400000,
-  );
-  const time = seenAt.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-
-  if (dayDiff < 0) {
-    return time;
-  }
-
-  const relativeDay = new Intl.RelativeTimeFormat("en", {
-    numeric: "auto",
-  }).format(-dayDiff, "day");
-  return `${relativeDay} ${time}`;
-}
-
-function buildMessagePreview(message: Message) {
-  if (message.type === "TEXT") {
-    return message.text ?? "Text";
-  }
-  if (message.type === "LOCATION") {
-    return "Location yuborildi";
-  }
-  if (message.type === "VOICE") {
-    return "Voice message";
-  }
-  return message.fileName ?? "File";
-}
-
-function isImageFile(message: Message): boolean {
-  if (message.fileMime?.startsWith("image/")) return true;
-  const ext = (message.fileName ?? "").split(".").pop()?.toLowerCase();
-  return ["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico"].includes(
-    ext ?? "",
-  );
-}
-
-function isVideoFile(message: Message): boolean {
-  if (message.fileMime?.startsWith("video/")) return true;
-  const ext = (message.fileName ?? "").split(".").pop()?.toLowerCase();
-  return ["mp4", "webm", "ogg", "mov", "avi", "mkv"].includes(ext ?? "");
-}
-
-function isMusicFile(message: Message): boolean {
-  if (message.type === "VOICE") return false; // voice messages use different player
-  if (message.fileMime?.startsWith("audio/")) return true;
-  const ext = (message.fileName ?? "").split(".").pop()?.toLowerCase();
-  return ["mp3", "ogg", "wav", "flac", "aac", "m4a", "wma"].includes(ext ?? "");
-}
-
-/** Extract music title from filename */
-function extractMusicTitle(fileName: string | null | undefined): {
-  artist: string;
-  title: string;
-} {
-  if (!fileName) return { artist: "Unknown", title: "Unknown" };
-  const name = fileName.replace(/\.[^.]+$/, ""); // remove extension
-  // Try "Artist – Title" or "Artist - Title" pattern
-  const separators = [" – ", " - ", " — "];
-  for (const sep of separators) {
-    const idx = name.indexOf(sep);
-    if (idx > 0) {
-      return {
-        artist: name.slice(0, idx).trim(),
-        title: name.slice(idx + sep.length).trim(),
-      };
-    }
-  }
-  return { artist: "", title: name };
-}
-
-/** Custom Video Player component */
-function VideoMessagePlayer({
-  src,
-  fileName,
-  isMine,
-}: {
-  src: string;
-  fileName?: string | null;
-  isMine?: boolean;
-}) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [showControls, setShowControls] = useState(true);
-  const [volume, setVolume] = useState(1);
-  const animRef = useRef<number>(0);
-  const hideTimerRef = useRef<number>(0);
-
-  const resetHideTimer = () => {
-    setShowControls(true);
-    if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
-    if (isFullscreen && isPlaying) {
-      hideTimerRef.current = window.setTimeout(
-        () => setShowControls(false),
-        3000,
-      );
-    }
-  };
-
-  const fmtTime = (s: number) => {
-    const m = Math.floor(s / 60);
-    const sec = Math.floor(s % 60);
-    return `${m}:${String(sec).padStart(2, "0")}`;
-  };
-
-  const togglePlay = () => {
-    const v = videoRef.current;
-    if (!v) return;
-    if (isPlaying) {
-      v.pause();
-      cancelAnimationFrame(animRef.current);
-      setIsPlaying(false);
-    } else {
-      v.play();
-      setIsPlaying(true);
-      const tick = () => {
-        if (v.duration) {
-          setProgress(v.currentTime / v.duration);
-          setCurrentTime(v.currentTime);
-        }
-        animRef.current = requestAnimationFrame(tick);
-      };
-      animRef.current = requestAnimationFrame(tick);
-    }
-  };
-
-  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
-    const v = videoRef.current;
-    if (!v || !v.duration) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(
-      0,
-      Math.min(1, (e.clientX - rect.left) / rect.width),
-    );
-    v.currentTime = ratio * v.duration;
-    setProgress(ratio);
-    setCurrentTime(v.currentTime);
-  };
-
-  const toggleFullscreen = () => {
-    const el = containerRef.current;
-    if (!el) return;
-    if (!document.fullscreenElement) {
-      el.requestFullscreen()
-        .then(() => setIsFullscreen(true))
-        .catch(() => {});
-    } else {
-      document
-        .exitFullscreen()
-        .then(() => setIsFullscreen(false))
-        .catch(() => {});
-    }
-  };
-
-  useEffect(() => {
-    const handler = () => setIsFullscreen(!!document.fullscreenElement);
-    document.addEventListener("fullscreenchange", handler);
-    return () => document.removeEventListener("fullscreenchange", handler);
-  }, []);
-
-  return (
-    <div
-      className={`video-player${isMine ? " mine" : ""}${isFullscreen ? " fullscreen" : ""}`}
-      ref={containerRef}
-      onMouseMove={resetHideTimer}
-      onMouseEnter={() => setShowControls(true)}
-      onMouseLeave={() => {
-        if (isFullscreen && isPlaying) setShowControls(false);
-      }}
-    >
-      <div className="video-container" onClick={togglePlay}>
-        <video
-          ref={videoRef}
-          src={src}
-          preload="metadata"
-          onLoadedMetadata={() => {
-            if (videoRef.current) setDuration(videoRef.current.duration);
-          }}
-          onEnded={() => {
-            cancelAnimationFrame(animRef.current);
-            setIsPlaying(false);
-            setProgress(0);
-            setCurrentTime(0);
-          }}
-        />
-        {!isPlaying && (
-          <div className="video-play-overlay">
-            <div className="video-play-circle">▶</div>
-          </div>
-        )}
-      </div>
-      {
-        <div
-          className={`video-controls${!showControls && isFullscreen ? " hidden" : ""}`}
-        >
-          <button className="video-ctrl-btn" onClick={togglePlay}>
-            {isPlaying ? "⏸" : "▶"}
-          </button>
-          <div className="video-progress-bar" onClick={handleSeek}>
-            <div
-              className="video-progress-fill"
-              style={{ width: `${progress * 100}%` }}
-            />
-          </div>
-          <span className="video-time">
-            {fmtTime(currentTime)} / {fmtTime(duration)}
-          </span>
-          <button
-            className="video-ctrl-btn"
-            onClick={() => {
-              const v = videoRef.current;
-              if (!v) return;
-              if (v.volume > 0) {
-                v.volume = 0;
-                setVolume(0);
-              } else {
-                v.volume = 1;
-                setVolume(1);
-              }
-            }}
-            title="Volume"
-          >
-            {volume > 0 ? "🔊" : "🔇"}
-          </button>
-          <input
-            type="range"
-            className="video-volume-slider"
-            min="0"
-            max="1"
-            step="0.01"
-            value={volume}
-            onChange={(e) => {
-              const v = parseFloat(e.target.value);
-              setVolume(v);
-              if (videoRef.current) videoRef.current.volume = v;
-            }}
-          />
-          <button
-            className="video-ctrl-btn video-fullscreen-btn"
-            onClick={toggleFullscreen}
-            title="Fullscreen"
-          >
-            {isFullscreen ? "⛶" : "⛶"}
-          </button>
-        </div>
-      }
-      {fileName && <div className="video-filename">{fileName}</div>}
-    </div>
-  );
-}
-
-/** Global music player context — single audio element architecture */
-type MusicTrack = {
-  src: string;
-  fileName: string;
-  artist: string;
-  title: string;
-  isVoice?: boolean;
-  durationHintSec?: number;
-  voiceQueue?: {
-    items: { id: string; src: string; durationSec?: number | null }[];
-    index: number;
-  };
-};
-
-type MusicPlaybackState = {
-  track: MusicTrack | null;
-  isPlaying: boolean;
-  progress: number;
-  currentTime: number;
-  duration: number;
-};
-
-// ── Centralized music player engine (single <audio> element) ──
-const musicStateListeners: Set<(state: MusicPlaybackState) => void> = new Set();
-const musicCommandListeners: Set<(cmd: MusicCommand) => void> = new Set();
-
-type MusicCommand =
-  | { type: "play"; track: MusicTrack }
-  | { type: "pause" }
-  | { type: "resume" }
-  | { type: "toggle"; track: MusicTrack }
-  | { type: "seek"; ratio: number }
-  | { type: "seekRelative"; delta: number }
-  | { type: "setVolume"; volume: number }
-  | { type: "setRepeat"; repeat: boolean }
-  | { type: "stop" };
-
-let globalMusicState: MusicPlaybackState = {
-  track: null,
-  isPlaying: false,
-  progress: 0,
-  currentTime: 0,
-  duration: 0,
-};
-
-function emitMusicState(state: MusicPlaybackState) {
-  globalMusicState = state;
-  musicStateListeners.forEach((fn) => fn(state));
-}
-
-function sendMusicCommand(cmd: MusicCommand) {
-  musicCommandListeners.forEach((fn) => fn(cmd));
-}
-
-function useMusicPlaybackState() {
-  const [state, setState] = useState<MusicPlaybackState>(globalMusicState);
-  useEffect(() => {
-    const handler = (s: MusicPlaybackState) => setState(s);
-    musicStateListeners.add(handler);
-    return () => {
-      musicStateListeners.delete(handler);
-    };
-  }, []);
-  return state;
-}
-
-function getEffectiveDuration(mediaDuration: number, hintDuration?: number) {
-  if (Number.isFinite(mediaDuration) && mediaDuration > 0) {
-    return mediaDuration;
-  }
-  if (Number.isFinite(hintDuration) && (hintDuration ?? 0) > 0) {
-    return hintDuration as number;
-  }
-  return 0;
-}
-
-/** Telegram-style Music Player in message bubble (UI only — no <audio>) */
-function MusicMessagePlayer({
-  src,
-  fileName,
-  isMine,
-}: {
-  src: string;
-  fileName?: string | null;
-  isMine?: boolean;
-}) {
-  const { artist, title } = useMemo(
-    () => extractMusicTitle(fileName),
-    [fileName],
-  );
-  const playback = useMusicPlaybackState();
-
-  // Is THIS track the currently active one?
-  const isActiveTrack = playback.track?.src === src;
-  const isPlaying = isActiveTrack && playback.isPlaying;
-  const progress = isActiveTrack ? playback.progress : 0;
-  const currentTime = isActiveTrack ? playback.currentTime : 0;
-  const duration = isActiveTrack ? playback.duration : 0;
-
-  const fmtTime = (s: number) => {
-    const m = Math.floor(s / 60);
-    const sec = Math.floor(s % 60);
-    return `${m}:${String(sec).padStart(2, "0")}`;
-  };
-
-  const togglePlay = () => {
-    sendMusicCommand({
-      type: "toggle",
-      track: { src, fileName: fileName ?? "", artist, title },
-    });
-  };
-
-  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isActiveTrack) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(
-      0,
-      Math.min(1, (e.clientX - rect.left) / rect.width),
-    );
-    sendMusicCommand({ type: "seek", ratio });
-  };
-
-  return (
-    <div className={`music-player${isMine ? " mine" : ""}`}>
-      <button className="music-play-btn" onClick={togglePlay}>
-        {isPlaying ? "⏸" : "▶"}
-      </button>
-      <div className="music-info">
-        <div className="music-title">{title || fileName}</div>
-        {artist && <div className="music-artist">{artist}</div>}
-        <div className="music-progress-row">
-          <div className="music-progress-bar" onClick={handleSeek}>
-            <div
-              className="music-progress-fill"
-              style={{ width: `${progress * 100}%` }}
-            />
-          </div>
-          <span className="music-time">
-            {fmtTime(currentTime)} / {fmtTime(duration)}
-          </span>
-        </div>
-      </div>
-      <div className="music-icon">🎵</div>
-    </div>
-  );
-}
-
-/** Global Music Controller Bar (top of screen) — owns the single <audio> element */
-function GlobalMusicController() {
-  const playback = useMusicPlaybackState();
-  const [volume, setVolume] = useState(1);
-  const [prevVolume, setPrevVolume] = useState(1);
-  const [repeat, setRepeat] = useState(false);
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const animRef = useRef<number>(0);
-  const currentSrcRef = useRef<string>("");
-
-  const fmtTime = (s: number) => {
-    const m = Math.floor(s / 60);
-    const sec = Math.floor(s % 60);
-    return `${m}:${String(sec).padStart(2, "0")}`;
-  };
-
-  // Start the progress animation loop
-  const startProgressLoop = useCallback(() => {
-    cancelAnimationFrame(animRef.current);
-    const tick = () => {
-      const a = audioRef.current;
-      if (a) {
-        const effectiveDuration = getEffectiveDuration(
-          a.duration,
-          globalMusicState.track?.durationHintSec,
-        );
-        emitMusicState({
-          ...globalMusicState,
-          isPlaying: !a.paused,
-          progress:
-            effectiveDuration > 0
-              ? Math.max(0, Math.min(1, a.currentTime / effectiveDuration))
-              : 0,
-          currentTime: a.currentTime,
-          duration: effectiveDuration,
-        });
-      }
-      animRef.current = requestAnimationFrame(tick);
-    };
-    animRef.current = requestAnimationFrame(tick);
-  }, []);
-
-  // Handle commands from bubble players and internal controls
-  useEffect(() => {
-    const handler = (cmd: MusicCommand) => {
-      const a = audioRef.current;
-      if (!a) return;
-
-      switch (cmd.type) {
-        case "play": {
-          if (currentSrcRef.current !== cmd.track.src) {
-            a.src = cmd.track.src;
-            a.load();
-            currentSrcRef.current = cmd.track.src;
-          }
-          a.volume = volume;
-          a.play()
-            .then(() => {
-              const effectiveDuration = getEffectiveDuration(
-                a.duration,
-                cmd.track.durationHintSec,
-              );
-              emitMusicState({
-                track: cmd.track,
-                isPlaying: true,
-                progress: 0,
-                currentTime: 0,
-                duration: effectiveDuration,
-              });
-              startProgressLoop();
-            })
-            .catch(() => {});
-          break;
-        }
-        case "pause": {
-          a.pause();
-          cancelAnimationFrame(animRef.current);
-          emitMusicState({ ...globalMusicState, isPlaying: false });
-          break;
-        }
-        case "resume": {
-          a.play()
-            .then(() => {
-              emitMusicState({ ...globalMusicState, isPlaying: true });
-              startProgressLoop();
-            })
-            .catch(() => {});
-          break;
-        }
-        case "toggle": {
-          const isCurrentTrack = globalMusicState.track?.src === cmd.track.src;
-          if (isCurrentTrack && globalMusicState.isPlaying) {
-            // Pause current track
-            a.pause();
-            cancelAnimationFrame(animRef.current);
-            emitMusicState({ ...globalMusicState, isPlaying: false });
-          } else if (isCurrentTrack && !globalMusicState.isPlaying) {
-            // Resume current track
-            a.play()
-              .then(() => {
-                emitMusicState({ ...globalMusicState, isPlaying: true });
-                startProgressLoop();
-              })
-              .catch(() => {});
-          } else {
-            // Play new track
-            a.src = cmd.track.src;
-            a.load();
-            currentSrcRef.current = cmd.track.src;
-            a.volume = volume;
-            a.play()
-              .then(() => {
-                const effectiveDuration = getEffectiveDuration(
-                  a.duration,
-                  cmd.track.durationHintSec,
-                );
-                emitMusicState({
-                  track: cmd.track,
-                  isPlaying: true,
-                  progress: 0,
-                  currentTime: 0,
-                  duration: effectiveDuration,
-                });
-                startProgressLoop();
-              })
-              .catch(() => {});
-          }
-          break;
-        }
-        case "seek": {
-          if (a.duration) {
-            a.currentTime = cmd.ratio * a.duration;
-            emitMusicState({
-              ...globalMusicState,
-              progress: cmd.ratio,
-              currentTime: a.currentTime,
-            });
-          }
-          break;
-        }
-        case "seekRelative": {
-          a.currentTime = Math.max(
-            0,
-            Math.min(a.duration || 0, a.currentTime + cmd.delta),
-          );
-          break;
-        }
-        case "setVolume": {
-          a.volume = cmd.volume;
-          break;
-        }
-        case "setRepeat": {
-          a.loop = cmd.repeat;
-          break;
-        }
-        case "stop": {
-          a.pause();
-          a.src = "";
-          currentSrcRef.current = "";
-          cancelAnimationFrame(animRef.current);
-          emitMusicState({
-            track: null,
-            isPlaying: false,
-            progress: 0,
-            currentTime: 0,
-            duration: 0,
-          });
-          break;
-        }
-      }
-    };
-
-    musicCommandListeners.add(handler);
-    return () => {
-      musicCommandListeners.delete(handler);
-    };
-  }, [volume, startProgressLoop]);
-
-  // Audio ended handler
-  const handleEnded = useCallback(() => {
-    if (!repeat) {
-      cancelAnimationFrame(animRef.current);
-      emitMusicState({
-        track: null,
-        isPlaying: false,
-        progress: 0,
-        currentTime: 0,
-        duration: 0,
-      });
-    }
-  }, [repeat]);
-
-  const track = playback.track;
-
-  const togglePlay = () => {
-    if (playback.isPlaying) {
-      sendMusicCommand({ type: "pause" });
-    } else {
-      sendMusicCommand({ type: "resume" });
-    }
-  };
-
-  const playVoiceFromQueue = useCallback((dir: -1 | 1) => {
-    const track = globalMusicState.track;
-    const queue = track?.voiceQueue;
-    if (!track?.isVoice || !queue || queue.items.length === 0) {
-      sendMusicCommand({ type: "seekRelative", delta: dir === -1 ? -10 : 10 });
-      return;
-    }
-
-    const nextIndex = queue.index + dir;
-    if (nextIndex < 0 || nextIndex >= queue.items.length) {
-      return;
-    }
-
-    const nextItem = queue.items[nextIndex];
-    sendMusicCommand({
-      type: "play",
-      track: {
-        src: nextItem.src,
-        fileName: "voice",
-        artist: "",
-        title: "Voice message",
-        isVoice: true,
-        durationHintSec: nextItem.durationSec ?? undefined,
-        voiceQueue: {
-          items: queue.items,
-          index: nextIndex,
-        },
-      },
-    });
-  }, []);
-
-  const seekBackward = () => playVoiceFromQueue(-1);
-  const seekForward = () => playVoiceFromQueue(1);
-
-  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = parseFloat(e.target.value);
-    setVolume(v);
-    sendMusicCommand({ type: "setVolume", volume: v });
-  };
-
-  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(
-      0,
-      Math.min(1, (e.clientX - rect.left) / rect.width),
-    );
-    sendMusicCommand({ type: "seek", ratio });
-  };
-
-  const close = () => sendMusicCommand({ type: "stop" });
-
-  // Always render <audio> so command handler works; only show bar UI when track exists
-  return (
-    <>
-      <audio
-        ref={audioRef}
-        preload="metadata"
-        onLoadedMetadata={() => {
-          const a = audioRef.current;
-          if (a) {
-            emitMusicState({
-              ...globalMusicState,
-              duration: getEffectiveDuration(
-                a.duration,
-                globalMusicState.track?.durationHintSec,
-              ),
-            });
-          }
-        }}
-        onEnded={handleEnded}
-        style={{ display: "none" }}
-      />
-      {track && (
-        <div className="global-music-bar">
-          <div className="gmb-controls">
-            <button
-              className="gmb-btn"
-              onClick={seekBackward}
-              title="10s orqaga"
-            >
-              ⏪
-            </button>
-            <button className="gmb-btn gmb-play" onClick={togglePlay}>
-              {playback.isPlaying ? "⏸" : "▶"}
-            </button>
-            <button
-              className="gmb-btn"
-              onClick={seekForward}
-              title="10s oldinga"
-            >
-              ⏩
-            </button>
-          </div>
-          <div className="gmb-info">
-            <span className="gmb-title">
-              {track.isVoice
-                ? "🎙️ Voice message"
-                : track.artist
-                  ? `${track.artist} – ${track.title}`
-                  : track.title}
-            </span>
-            <span className="gmb-time">{fmtTime(playback.currentTime)}</span>
-          </div>
-          <div className="gmb-progress" onClick={handleSeek}>
-            <div
-              className="gmb-progress-fill"
-              style={{ width: `${playback.progress * 100}%` }}
-            />
-          </div>
-          <div className="gmb-right">
-            <button
-              className="gmb-btn"
-              onClick={() => {
-                if (volume > 0) {
-                  setPrevVolume(volume);
-                  setVolume(0);
-                  sendMusicCommand({ type: "setVolume", volume: 0 });
-                } else {
-                  const restore = prevVolume > 0 ? prevVolume : 1;
-                  setVolume(restore);
-                  sendMusicCommand({ type: "setVolume", volume: restore });
-                }
-              }}
-              title="Volume"
-            >
-              {volume > 0 ? "🔊" : "🔇"}
-            </button>
-            <input
-              type="range"
-              className="gmb-volume"
-              min="0"
-              max="1"
-              step="0.01"
-              value={volume}
-              onChange={handleVolumeChange}
-            />
-            <button
-              className={`gmb-btn${repeat ? " active" : ""}`}
-              onClick={() => {
-                const next = !repeat;
-                setRepeat(next);
-                sendMusicCommand({ type: "setRepeat", repeat: next });
-              }}
-              title="Repeat"
-            >
-              🔁
-            </button>
-            <button className="gmb-btn gmb-close" onClick={close} title="Close">
-              ✕
-            </button>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
-
-/** Voice message player with waveform visualisation — uses global audio engine */
-function AudioWaveformPlayer({
-  src,
-  durationSec,
-  isMine,
-  messageId,
-  voiceQueue,
-}: {
-  src: string;
-  durationSec?: number | null;
-  isMine?: boolean;
-  messageId: string;
-  voiceQueue?: { id: string; src: string; durationSec?: number | null }[];
-}) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [waveformData, setWaveformData] = useState<number[]>([]);
-  const playback = useMusicPlaybackState();
-
-  // Is THIS voice the currently active track?
-  const isActiveTrack = playback.track?.src === src;
-  const isPlaying = isActiveTrack && playback.isPlaying;
-  const progress = isActiveTrack ? playback.progress : 0;
-  const currentTime = isActiveTrack ? playback.currentTime : 0;
-
-  // Decode audio and generate waveform data once
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const resp = await fetch(src);
-        const buffer = await resp.arrayBuffer();
-        const ctx = new AudioContext();
-        const decoded = await ctx.decodeAudioData(buffer);
-        const raw = decoded.getChannelData(0);
-        const bars = 48;
-        const step = Math.floor(raw.length / bars);
-        const peaks: number[] = [];
-        for (let i = 0; i < bars; i++) {
-          let max = 0;
-          for (let j = 0; j < step; j++) {
-            const abs = Math.abs(raw[i * step + j]);
-            if (abs > max) max = abs;
-          }
-          peaks.push(max);
-        }
-        const peakMax = Math.max(...peaks, 0.01);
-        if (!cancelled) setWaveformData(peaks.map((p) => p / peakMax));
-        ctx.close();
-      } catch {
-        if (!cancelled)
-          setWaveformData(
-            Array.from({ length: 48 }, () => 0.2 + Math.random() * 0.6),
-          );
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [src]);
-
-  // Draw waveform on canvas
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || waveformData.length === 0) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    const w = canvas.clientWidth;
-    const h = canvas.clientHeight;
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, w, h);
-
-    const barW = Math.max(2, w / waveformData.length - 1.5);
-    const gap =
-      (w - barW * waveformData.length) / (waveformData.length - 1 || 1);
-    const progressBars = Math.floor(progress * waveformData.length);
-
-    const playedColor = isMine ? "#ffffff" : "#0e7c66";
-    const unplayedColor = isMine
-      ? "rgba(255,255,255,0.35)"
-      : "rgba(14,124,102,0.3)";
-
-    for (let i = 0; i < waveformData.length; i++) {
-      const barH = Math.max(3, waveformData[i] * (h - 4));
-      const x = i * (barW + gap);
-      const y = (h - barH) / 2;
-      ctx.fillStyle = i < progressBars ? playedColor : unplayedColor;
-      ctx.beginPath();
-      ctx.roundRect(x, y, barW, barH, 1.5);
-      ctx.fill();
-    }
-  }, [waveformData, progress, isMine]);
-
-  const togglePlay = () => {
-    const queueIndex =
-      voiceQueue?.findIndex((item) => item.id === messageId) ?? -1;
-    sendMusicCommand({
-      type: "toggle",
-      track: {
-        src,
-        fileName: "voice",
-        artist: "",
-        title: "Voice message",
-        isVoice: true,
-        durationHintSec: durationSec ?? undefined,
-        voiceQueue:
-          queueIndex >= 0 && voiceQueue
-            ? { items: voiceQueue, index: queueIndex }
-            : undefined,
-      },
-    });
-  };
-
-  const dur = durationSec ?? 0;
-  const fmtTime = (s: number) =>
-    `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-
-  return (
-    <div className={`voice-waveform-player${isMine ? " mine" : ""}`}>
-      <button className="wave-play-btn" onClick={togglePlay}>
-        {isPlaying ? "⏸" : "▶"}
-      </button>
-      <canvas ref={canvasRef} className="wave-canvas" />
-      <span className="wave-time">
-        {isPlaying ? fmtTime(Math.floor(currentTime)) : fmtTime(dur)}
-      </span>
-    </div>
-  );
-}
-
-// ── URL detection regex ──
-const URL_REGEX = /(https?:\/\/[^\s<>"')\]]+)/gi;
-
-// ── Mention detection regex: @[DisplayName](userId) ──
-const MENTION_REGEX = /@\[([^\]]+)\]\(([^)]+)\)/g;
-
-// ── OG Metadata cache (persists across re-renders) ──
-const ogMetaCache = new Map<string, OgMeta | null>();
-const ogMetaFetching = new Set<string>();
-
-type OgMeta = {
-  url: string;
-  title: string | null;
-  description: string | null;
-  image: string | null;
-  siteName: string | null;
-  type: string | null;
-  video: string | null;
-};
-
-function getSiteName(url: string): string {
-  try {
-    const hostname = new URL(url).hostname.replace(/^www\./, "");
-    return hostname;
-  } catch {
-    return "";
-  }
-}
-
-/** Extract YouTube video ID from various URL formats */
-function getYouTubeVideoId(url: string): string | null {
-  try {
-    const u = new URL(url);
-    // youtube.com/watch?v=ID
-    if (u.hostname.includes("youtube.com") && u.searchParams.has("v")) {
-      return u.searchParams.get("v");
-    }
-    // youtu.be/ID
-    if (u.hostname === "youtu.be") {
-      return u.pathname.slice(1).split("/")[0] || null;
-    }
-    // youtube.com/embed/ID
-    if (
-      u.hostname.includes("youtube.com") &&
-      u.pathname.startsWith("/embed/")
-    ) {
-      return u.pathname.split("/")[2] || null;
-    }
-    // youtube.com/shorts/ID
-    if (
-      u.hostname.includes("youtube.com") &&
-      u.pathname.startsWith("/shorts/")
-    ) {
-      return u.pathname.split("/")[2] || null;
-    }
-  } catch {
-    /* ignore */
-  }
-  return null;
-}
-
-function isYouTubeShortsUrl(url: string): boolean {
-  try {
-    const u = new URL(url);
-    return (
-      u.hostname.includes("youtube.com") && u.pathname.startsWith("/shorts/")
-    );
-  } catch {
-    return false;
-  }
-}
-
-/** Extract Instagram post/reel URL for embeddable iframe endpoint */
-function getInstagramEmbedUrl(url: string): string | null {
-  try {
-    const u = new URL(url);
-    if (!u.hostname.includes("instagram.com")) return null;
-    const parts = u.pathname.split("/").filter(Boolean);
-    if (parts.length < 2) return null;
-    const kind = parts[0];
-    const id = parts[1];
-    if (!["p", "reel", "tv"].includes(kind) || !id) return null;
-    return `https://www.instagram.com/${kind}/${id}/embed/captioned/`;
-  } catch {
-    return null;
-  }
-}
-
-// Allow message text links to request inline opening in the corresponding LinkPreview card.
-const inlineLinkOpenListeners = new Set<(url: string) => void>();
-function requestInlineLinkOpen(url: string) {
-  inlineLinkOpenListeners.forEach((fn) => fn(url));
-}
-
-/** Link preview card (Telegram-style) with inline YouTube / Instagram player */
-function LinkPreview({ url }: { url: string }) {
-  const [meta, setMeta] = useState<OgMeta | null>(ogMetaCache.get(url) ?? null);
-  const [loaded, setLoaded] = useState(ogMetaCache.has(url));
-  const [imgError, setImgError] = useState(false);
-  const [ytPlaying, setYtPlaying] = useState(false);
-  const [igPlaying, setIgPlaying] = useState(false);
-  const [igLoaded, setIgLoaded] = useState(false);
-  const [igInlineFailed, setIgInlineFailed] = useState(false);
-  const [inlineVolume, setInlineVolume] = useState<number>(() => {
-    const v = Number(localStorage.getItem("inline_media_volume") ?? "1");
-    return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1;
-  });
-  const isYouTube = /youtube\.com|youtu\.be/i.test(url);
-  const ytVideoId = isYouTube ? getYouTubeVideoId(url) : null;
-  const isYouTubeShorts = isYouTube ? isYouTubeShortsUrl(url) : false;
-  const isInstagram = /instagram\.com/i.test(url);
-  const instagramEmbedUrl = isInstagram ? getInstagramEmbedUrl(url) : null;
-  const canUseNativeInstagramVideo = isInstagram && Boolean(meta?.video);
-  const ytIframeRef = useRef<HTMLIFrameElement | null>(null);
-  const igVideoRef = useRef<HTMLVideoElement | null>(null);
-
-  const applyYouTubeVolume = useCallback((vol: number) => {
-    const iframe = ytIframeRef.current;
-    if (!iframe?.contentWindow) return;
-    const pct = Math.round(Math.max(0, Math.min(1, vol)) * 100);
-    const message = JSON.stringify({
-      event: "command",
-      func: "setVolume",
-      args: [pct],
-    });
-    iframe.contentWindow.postMessage(message, "*");
-  }, []);
-
-  useEffect(() => {
-    if (ogMetaCache.has(url)) {
-      setMeta(ogMetaCache.get(url) ?? null);
-      setLoaded(true);
-      return;
-    }
-    if (ogMetaFetching.has(url)) return;
-    ogMetaFetching.add(url);
-
-    fetch(`${API_URL}/og-meta?url=${encodeURIComponent(url)}`)
-      .then((r) => r.json())
-      .then((data: OgMeta) => {
-        ogMetaCache.set(url, data);
-        ogMetaFetching.delete(url);
-        setMeta(data);
-        setLoaded(true);
-      })
-      .catch(() => {
-        ogMetaCache.set(url, null);
-        ogMetaFetching.delete(url);
-        setLoaded(true);
-      });
-  }, [url]);
-
-  useEffect(() => {
-    if (canUseNativeInstagramVideo) return;
-    if (!igPlaying) return;
-    setIgLoaded(false);
-    setIgInlineFailed(false);
-    const t = window.setTimeout(() => {
-      setIgInlineFailed((prev) => prev || !igLoaded);
-    }, 4500);
-    return () => window.clearTimeout(t);
-  }, [igPlaying, igLoaded, canUseNativeInstagramVideo]);
-
-  useEffect(() => {
-    localStorage.setItem("inline_media_volume", String(inlineVolume));
-    if (ytPlaying && isYouTube) {
-      applyYouTubeVolume(inlineVolume);
-    }
-    if (igPlaying && canUseNativeInstagramVideo && igVideoRef.current) {
-      igVideoRef.current.volume = inlineVolume;
-    }
-  }, [
-    inlineVolume,
-    ytPlaying,
-    isYouTube,
-    applyYouTubeVolume,
-    igPlaying,
-    canUseNativeInstagramVideo,
-  ]);
-
-  useEffect(() => {
-    const openInline = (targetUrl: string) => {
-      if (targetUrl !== url) return;
-      if (isYouTube && ytVideoId) {
-        setYtPlaying(true);
-        return;
-      }
-      if (isInstagram && instagramEmbedUrl) {
-        setIgPlaying(true);
-      }
-    };
-    inlineLinkOpenListeners.add(openInline);
-    return () => {
-      inlineLinkOpenListeners.delete(openInline);
-    };
-  }, [url, isYouTube, ytVideoId, isInstagram, instagramEmbedUrl]);
-
-  if (!loaded) {
-    return (
-      <div className="link-preview loading">
-        <div className="link-preview-spinner" />
-      </div>
-    );
-  }
-
-  if (!meta || (!meta.title && !meta.description && !meta.image)) {
-    return null; // No OG meta, show nothing extra
-  }
-
-  const siteName = meta.siteName || getSiteName(url);
-
-  // YouTube inline player mode
-  if (isYouTube && ytVideoId && ytPlaying) {
-    const ytSrc = isYouTubeShorts
-      ? `https://www.youtube.com/embed/${ytVideoId}?autoplay=1&rel=0&playsinline=1&enablejsapi=1&mute=1&loop=1&playlist=${ytVideoId}`
-      : `https://www.youtube.com/embed/${ytVideoId}?autoplay=1&rel=0&playsinline=1&enablejsapi=1`;
-
-    return (
-      <div
-        className="link-preview youtube-embed"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div
-          className={`youtube-player-wrap${isYouTubeShorts ? " shorts" : ""}`}
-        >
-          <iframe
-            ref={ytIframeRef}
-            src={ytSrc}
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowFullScreen
-            title={meta.title || "YouTube video"}
-            onLoad={() => applyYouTubeVolume(inlineVolume)}
-          />
-        </div>
-        <div
-          className="link-preview-body"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            justifyContent: "space-between",
-          }}
-        >
-          <div style={{ flex: 1, minWidth: 0 }}>
-            {meta.title && (
-              <div className="link-preview-title" style={{ fontSize: 12 }}>
-                {meta.title}
-              </div>
-            )}
-            <div className="inline-media-volume-row">
-              <span>🔊</span>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={inlineVolume}
-                onChange={(e) => setInlineVolume(parseFloat(e.target.value))}
-              />
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-            <button
-              className="yt-inline-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                setYtPlaying(false);
-              }}
-              title="Close player"
-            >
-              ✕
-            </button>
-            <button
-              className="yt-inline-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                BrowserOpenURL(url);
-              }}
-              title="Open in browser"
-            >
-              ↗
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Instagram inline embed mode
-  if (isInstagram && instagramEmbedUrl && igPlaying) {
-    return (
-      <div
-        className="link-preview instagram-embed"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {canUseNativeInstagramVideo ? (
-          <div className="instagram-native-wrap">
-            <video
-              ref={igVideoRef}
-              className="instagram-native-video"
-              src={meta?.video ?? undefined}
-              controls
-              playsInline
-              autoPlay
-              preload="metadata"
-              poster={meta?.image ?? undefined}
-              onLoadedMetadata={() => {
-                if (igVideoRef.current) {
-                  igVideoRef.current.volume = inlineVolume;
-                }
-              }}
-            />
-          </div>
-        ) : (
-          <div className="instagram-player-wrap">
-            <iframe
-              src={instagramEmbedUrl}
-              allow="autoplay; clipboard-write; encrypted-media; picture-in-picture"
-              title={meta.title || "Instagram post"}
-              onLoad={() => setIgLoaded(true)}
-            />
-          </div>
-        )}
-        {!canUseNativeInstagramVideo && igInlineFailed && (
-          <div className="instagram-inline-warning">
-            Instagram inline ochilmadi. Avval login talab qilinishi mumkin.
-            <button
-              className="yt-inline-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                BrowserOpenURL("https://www.instagram.com/accounts/login/");
-              }}
-              title="Login Instagram"
-            >
-              Login
-            </button>
-          </div>
-        )}
-        <div
-          className="link-preview-body"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            justifyContent: "space-between",
-          }}
-        >
-          <div style={{ flex: 1, minWidth: 0 }}>
-            {meta.title && (
-              <div className="link-preview-title" style={{ fontSize: 12 }}>
-                {meta.title}
-              </div>
-            )}
-            <div className="inline-media-volume-row">
-              <span>🔊</span>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={inlineVolume}
-                onChange={(e) => setInlineVolume(parseFloat(e.target.value))}
-                disabled={!canUseNativeInstagramVideo}
-              />
-            </div>
-            {!canUseNativeInstagramVideo && (
-              <small className="inline-media-volume-note">
-                Instagram iframe rejimida ovoz boshqaruvi cheklangan.
-              </small>
-            )}
-          </div>
-          <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-            <button
-              className="yt-inline-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                setIgPlaying(false);
-              }}
-              title="Close player"
-            >
-              ✕
-            </button>
-            <button
-              className="yt-inline-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                BrowserOpenURL(url);
-              }}
-              title="Open in browser"
-            >
-              ↗
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className="link-preview"
-      onClick={(e) => {
-        e.stopPropagation();
-        if (isYouTube && ytVideoId) {
-          setYtPlaying(true);
-        } else if (isInstagram && instagramEmbedUrl) {
-          setIgPlaying(true);
-        } else {
-          BrowserOpenURL(url);
-        }
-      }}
-    >
-      {meta.image && !imgError && (
-        <div
-          className={`link-preview-image${isYouTube ? " youtube" : ""}${isInstagram ? " instagram" : ""}`}
-        >
-          <img src={meta.image} alt="" onError={() => setImgError(true)} />
-          {isYouTube && (
-            <div className="link-preview-play">
-              <svg viewBox="0 0 68 48" width="48" height="34">
-                <path
-                  d="M66.52 7.74c-.78-2.93-2.49-5.41-5.42-6.19C55.79.13 34 0 34 0S12.21.13 6.9 1.55c-2.93.78-4.63 3.26-5.42 6.19C.06 13.05 0 24 0 24s.06 10.95 1.48 16.26c.78 2.93 2.49 5.41 5.42 6.19C12.21 47.87 34 48 34 48s21.79-.13 27.1-1.55c2.93-.78 4.63-3.26 5.42-6.19C67.94 34.95 68 24 68 24s-.06-10.95-1.48-16.26z"
-                  fill="red"
-                />
-                <path d="M45 24L27 14v20" fill="white" />
-              </svg>
-            </div>
-          )}
-          {isInstagram && (
-            <div className="link-preview-play">
-              <svg
-                width="40"
-                height="40"
-                viewBox="0 0 24 24"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <rect
-                  x="3"
-                  y="3"
-                  width="18"
-                  height="18"
-                  rx="5"
-                  fill="rgba(0,0,0,0.55)"
-                />
-                <path
-                  d="M12 8.2C14.1 8.2 15.8 9.9 15.8 12C15.8 14.1 14.1 15.8 12 15.8C9.9 15.8 8.2 14.1 8.2 12C8.2 9.9 9.9 8.2 12 8.2Z"
-                  fill="white"
-                />
-                <circle cx="16.7" cy="7.3" r="1" fill="white" />
-              </svg>
-            </div>
-          )}
-        </div>
-      )}
-      <div className="link-preview-body">
-        {siteName && <div className="link-preview-site">{siteName}</div>}
-        {meta.title && <div className="link-preview-title">{meta.title}</div>}
-        {meta.description && (
-          <div className="link-preview-desc">
-            {meta.description.length > 150
-              ? meta.description.slice(0, 150) + "…"
-              : meta.description}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function formatCallLogDuration(totalSeconds: number) {
-  const safe = Math.max(0, Math.floor(totalSeconds));
-  const hh = Math.floor(safe / 3600);
-  const mm = Math.floor((safe % 3600) / 60);
-  const ss = safe % 60;
-
-  if (hh > 0) {
-    return `${hh}h ${mm}m`;
-  }
-  if (mm > 0) {
-    return `${mm}m ${ss}s`;
-  }
-  return `${ss}s`;
-}
-
-function normalizeLegacyCallLogText(text: string) {
-  const match = text.match(/^📞\s*Call ended\s*•\s*(\d+):(\d{2})$/);
-  if (!match) {
-    return text;
-  }
-
-  const minutes = Number(match[1]);
-  const seconds = Number(match[2]);
-  if (!Number.isFinite(minutes) || !Number.isFinite(seconds)) {
-    return text;
-  }
-
-  const totalSeconds = Math.max(0, minutes * 60 + seconds);
-  return `📞 Call ended • ${formatCallLogDuration(totalSeconds)}`;
-}
-
-/** Render text with clickable links, OG previews, and @mentions */
-function renderTextWithLinks(
-  text: string,
-  onMentionClick?: (userId: string) => void,
-): React.ReactNode {
-  // First, split by mention pattern, then by URL pattern
-  const MENTION_SPLIT = /@\[([^\]]+)\]\(([^)]+)\)/g;
-
-  // Split text by mentions first
-  const mentionParts: (
-    | string
-    | { type: "mention"; name: string; userId: string }
-  )[] = [];
-  let lastIdx = 0;
-  let match: RegExpExecArray | null;
-  MENTION_SPLIT.lastIndex = 0;
-  while ((match = MENTION_SPLIT.exec(text)) !== null) {
-    if (match.index > lastIdx) {
-      mentionParts.push(text.slice(lastIdx, match.index));
-    }
-    mentionParts.push({ type: "mention", name: match[1], userId: match[2] });
-    lastIdx = match.index + match[0].length;
-  }
-  if (lastIdx < text.length) {
-    mentionParts.push(text.slice(lastIdx));
-  }
-
-  const urls: string[] = [];
-  const elements = mentionParts.map((part, i) => {
-    if (typeof part !== "string") {
-      // Render mention badge
-      return (
-        <span
-          key={`mention-${i}`}
-          className="mention-badge"
-          onClick={(e) => {
-            e.stopPropagation();
-            onMentionClick?.(part.userId);
-          }}
-        >
-          @{part.name}
-        </span>
-      );
-    }
-
-    // For string parts, split by URLs
-    const urlParts = part.split(URL_REGEX);
-    if (urlParts.length === 1) return <span key={i}>{part}</span>;
-
-    return urlParts.map((urlPart, j) => {
-      if (URL_REGEX.test(urlPart)) {
-        URL_REGEX.lastIndex = 0;
-        if (!urls.includes(urlPart)) urls.push(urlPart);
-        return (
-          <a
-            key={`${i}-${j}`}
-            href="#"
-            className="msg-link"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (/youtube\.com|youtu\.be|instagram\.com/i.test(urlPart)) {
-                requestInlineLinkOpen(urlPart);
-              } else {
-                BrowserOpenURL(urlPart);
-              }
-            }}
-          >
-            {urlPart}
-          </a>
-        );
-      }
-      URL_REGEX.lastIndex = 0;
-      return <span key={`${i}-${j}`}>{urlPart}</span>;
-    });
-  });
-
-  return (
-    <>
-      <span>{elements}</span>
-      {urls.map((u) => (
-        <LinkPreview key={u} url={u} />
-      ))}
-    </>
-  );
-}
-
-function renderMessage(
-  message: Message,
-  onImageClick?: (url: string) => void,
-  isMine?: boolean,
-  onMentionClick?: (userId: string) => void,
-  voiceQueue?: { id: string; src: string; durationSec?: number | null }[],
-) {
-  if (message.type === "TEXT") {
-    return renderTextWithLinks(
-      normalizeLegacyCallLogText(message.text ?? ""),
-      onMentionClick,
-    );
-  }
-  if (message.type === "LOCATION") {
-    const lat = Number(message.latitude);
-    const lng = Number(message.longitude);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-      return <span>📍 Location yuborildi</span>;
-    }
-
-    const mapUrl = `https://www.google.com/maps?q=${lat},${lng}`;
-    const delta = 0.01;
-    const west = (lng - delta).toFixed(6);
-    const east = (lng + delta).toFixed(6);
-    const north = (lat + delta).toFixed(6);
-    const south = (lat - delta).toFixed(6);
-    const embedUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${west}%2C${south}%2C${east}%2C${north}&layer=mapnik&marker=${lat.toFixed(6)}%2C${lng.toFixed(6)}`;
-
-    return (
-      <div className="location-preview">
-        <iframe
-          title={`Location ${lat.toFixed(5)}, ${lng.toFixed(5)}`}
-          src={embedUrl}
-          className="location-preview-map"
-          loading="lazy"
-          referrerPolicy="no-referrer-when-downgrade"
-        />
-        <a
-          href={mapUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="location-preview-caption"
-        >
-          📍 {lat.toFixed(5)}, {lng.toFixed(5)}
-        </a>
-      </div>
-    );
-  }
-  if (message.type === "VOICE") {
-    return (
-      <AudioWaveformPlayer
-        src={normalizeFileUrl(message.fileUrl) ?? ""}
-        durationSec={message.durationSec}
-        isMine={isMine}
-        messageId={message.id}
-        voiceQueue={voiceQueue}
-      />
-    );
-  }
-  // Video preview
-  if (isVideoFile(message)) {
-    return (
-      <VideoMessagePlayer
-        src={normalizeFileUrl(message.fileUrl) ?? ""}
-        fileName={message.fileName}
-        isMine={isMine}
-      />
-    );
-  }
-  // Music preview (Telegram style)
-  if (isMusicFile(message)) {
-    return (
-      <MusicMessagePlayer
-        src={normalizeFileUrl(message.fileUrl) ?? ""}
-        fileName={message.fileName}
-        isMine={isMine}
-      />
-    );
-  }
-  // Image preview inline
-  if (isImageFile(message)) {
-    const imgUrl = normalizeFileUrl(message.fileUrl) ?? "";
-    return (
-      <img
-        src={imgUrl}
-        alt={message.fileName ?? "Image"}
-        style={{
-          maxWidth: "100%",
-          maxHeight: 300,
-          borderRadius: 10,
-          display: "block",
-          cursor: "pointer",
-        }}
-        onClick={() => onImageClick?.(imgUrl)}
-      />
-    );
-  }
-  return <FileMessageBubble message={message} />;
-}
-
-/** File message bubble with Download + Show in Explorer buttons */
-function FileMessageBubble({ message }: { message: Message }) {
-  const [downloaded, setDownloaded] = useState(false);
-  const [downloading, setDownloading] = useState(false);
-  const fileName = message.fileName ?? "file";
-  const canRevealDownloadedFile = isWailsRuntime;
-
-  useEffect(() => {
-    FileExistsInDownloads(fileName)
-      .then(setDownloaded)
-      .catch(() => {});
-  }, [fileName]);
-
-  const handleDownload = async () => {
-    try {
-      setDownloading(true);
-      const rawUrl = message.fileUrl ?? "";
-      const url = normalizeFileUrl(rawUrl) ?? rawUrl;
-      await SaveFileFromURL(url, fileName);
-      if (canRevealDownloadedFile) {
-        setDownloaded(true);
-      }
-      toast.success("File downloaded!");
-    } catch {
-      toast.error("Download error");
-    } finally {
-      setDownloading(false);
-    }
-  };
-
-  const handleShowInExplorer = async () => {
-    try {
-      const path = await GetDownloadPath(fileName);
-      if (path) await ShowInExplorer(path);
-    } catch {
-      toast.error("Error opening file");
-    }
-  };
-
-  return (
-    <div className="file-msg-bubble">
-      <div className="file-msg-name">📎 {fileName}</div>
-      <div className="file-msg-actions">
-        {!downloaded || !canRevealDownloadedFile ? (
-          <button
-            className="file-msg-btn file-download-btn"
-            onClick={handleDownload}
-            disabled={downloading}
-          >
-            {downloading ? "⏳ Yuklanmoqda..." : "⬇ Download"}
-          </button>
-        ) : (
-          <button
-            className="file-msg-btn file-explorer-btn"
-            onClick={handleShowInExplorer}
-          >
-            📂 Show in Explorer
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function readAxiosMessage(error: unknown, fallback: string) {
-  if (typeof error === "object" && error && "response" in error) {
-    const response = (error as { response?: { data?: { message?: string } } })
-      .response;
-    if (response?.data?.message) {
-      return response.data.message;
-    }
-  }
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-  return fallback;
-}
-
-function getAxiosStatus(error: unknown): number | null {
-  if (typeof error === "object" && error && "response" in error) {
-    const response = (error as { response?: { status?: number } }).response;
-    return typeof response?.status === "number" ? response.status : null;
-  }
-  return null;
-}
-
 export default App;
+

@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Group Voice Call - Real Live Test</title>
+  <script src="http://localhost:4000/socket.io/socket.io.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0b0f19;
+      color: #f1f5f9;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+    header {
+      background: #1e293b;
+      padding: 14px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #334155;
+    }
+    .user-tag {
+      font-size: 18px;
+      font-weight: 700;
+      color: #38bdf8;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .status-badge {
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: #334155;
+      color: #94a3b8;
+    }
+    .status-badge.active { background: #166534; color: #4ade80; }
+    .status-badge.ringing { background: #854d0e; color: #facc15; animation: pulse 1s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 20px;
+      gap: 16px;
+      overflow-y: auto;
+    }
+    .card {
+      background: #131d2e;
+      border: 1px solid #23354d;
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .call-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #1e293b;
+      border-radius: 10px;
+      padding: 12px 18px;
+    }
+    .call-btn {
+      background: #22c55e;
+      color: #fff;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s;
+    }
+    .call-btn:hover { background: #16a34a; }
+    .call-btn.hangup { background: #ef4444; }
+    .call-btn.hangup:hover { background: #dc2626; }
+
+    .participants-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 14px;
+    }
+    .p-card {
+      background: #182338;
+      border: 2px solid #2a3d5b;
+      border-radius: 10px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      position: relative;
+    }
+    .p-card.speaking {
+      border-color: #22c55e;
+      box-shadow: 0 0 15px rgba(34, 197, 94, 0.4);
+    }
+    .avatar {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      font-weight: 700;
+      color: #fff;
+    }
+    .speaking-indicator {
+      font-size: 12px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: #1e293b;
+      color: #64748b;
+    }
+    .p-card.speaking .speaking-indicator {
+      background: #14532d;
+      color: #4ade80;
+      font-weight: 700;
+    }
+    .waveform {
+      width: 100%;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+    }
+    .wave-bar {
+      width: 4px;
+      height: 4px;
+      background: #475569;
+      border-radius: 2px;
+      transition: height 0.1s ease;
+    }
+    .p-card.speaking .wave-bar { background: #22c55e; }
+
+    .metrics-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      font-family: monospace;
+    }
+    .metrics-table th, .metrics-table td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #23354d;
+      text-align: left;
+    }
+    .metrics-table th { color: #94a3b8; font-weight: 600; }
+    .metrics-table td { color: #cbd5e1; }
+    .success-text { color: #4ade80 !important; font-weight: 600; }
+
+    .log-box {
+      background: #090d16;
+      border-radius: 6px;
+      padding: 10px;
+      font-family: monospace;
+      font-size: 12px;
+      height: 120px;
+      overflow-y: auto;
+      color: #94a3b8;
+    }
+    .log-entry { margin-bottom: 3px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="user-tag">
+      <span id="headerAvatar">👤</span>
+      <span id="headerName">Loading User...</span>
+    </div>
+    <div id="statusBadge" class="status-badge">Connecting...</div>
+  </header>
+
+  <main>
+    <div class="card call-bar">
+      <div>
+        <div style="font-weight: 600; font-size: 15px;" id="groupTitle">Group: Dota 2 Test Group</div>
+        <div style="font-size: 12px; color: #94a3b8;" id="callSubtitle">Status: Idle</div>
+      </div>
+      <button id="callActionBtn" class="call-btn">📞 Start Group Call</button>
+    </div>
+
+    <div class="card">
+      <div style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #94a3b8;">Call Participants</div>
+      <div class="participants-grid" id="participantsGrid">
+        <!-- populated dynamically -->
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: #94a3b8;">Live Audio & WebRTC Stats</div>
+      <table class="metrics-table">
+        <thead>
+          <tr>
+            <th>Peer</th>
+            <th>WebRTC State</th>
+            <th>Audio Received</th>
+            <th>Signal Heard?</th>
+            <th>Microphone RMS</th>
+          </tr>
+        </thead>
+        <tbody id="metricsBody">
+          <tr><td colspan="5" style="text-align: center; color: #64748b;">No active call</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top: auto;">
+      <div style="font-size: 12px; font-weight: 600; margin-bottom: 6px; color: #64748b;">Live Console Log</div>
+      <div class="log-box" id="logBox"></div>
+    </div>
+  </main>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const role = params.get("role") || "userA"; // userA or userB
+    const groupData = JSON.parse(decodeURIComponent(params.get("data") || "{}"));
+    const myUser = role === "userA" ? groupData.userA : groupData.userB;
+    const peerUser = role === "userA" ? groupData.userB : groupData.userA;
+    const groupId = groupData.groupId;
+
+    const headerName = document.getElementById("headerName");
+    const headerAvatar = document.getElementById("headerAvatar");
+    const statusBadge = document.getElementById("statusBadge");
+    const callSubtitle = document.getElementById("callSubtitle");
+    const callActionBtn = document.getElementById("callActionBtn");
+    const participantsGrid = document.getElementById("participantsGrid");
+    const metricsBody = document.getElementById("metricsBody");
+    const logBox = document.getElementById("logBox");
+
+    headerName.textContent = `${myUser.name} (${myUser.email})`;
+    headerAvatar.textContent = role === "userA" ? "🅰️" : "🅱️";
+
+    function log(msg, color = "#94a3b8") {
+      const el = document.createElement("div");
+      el.className = "log-entry";
+      el.style.color = color;
+      el.textContent = `[${new Date().toISOString().slice(11, 19)}] ${msg}`;
+      logBox.appendChild(el);
+      logBox.scrollTop = logBox.scrollHeight;
+      console.log(msg);
+    }
+
+    // Audio setup
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const dest = audioCtx.createMediaStreamDestination();
+    let osc = null;
+    let gainNode = audioCtx.createGain();
+    gainNode.gain.value = 0.00001; // nearly silent baseline
+    gainNode.connect(dest);
+
+    // Baseline tone to keep stream live
+    const baseTone = audioCtx.createOscillator();
+    baseTone.frequency.value = 80;
+    baseTone.connect(gainNode);
+    baseTone.start();
+
+    const localStream = dest.stream;
+
+    let socket = null;
+    let peerConn = null;
+    let remoteAudioAnalyser = null;
+    let audioStatsTimer = null;
+    let inCall = false;
+
+    const rtcConfig = {
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        {
+          urls: "turn:mytelegramchat.ddns.net:3478",
+          username: "chatturn",
+          credential: "9Fzi61Srx5OU9isIoJ8vwJ7N"
+        },
+        {
+          urls: "turn:mytelegramchat.ddns.net:3478",
+          username: "chatuser",
+          credential: "ChatTurnPass2026"
+        }
+      ]
+    };
+
+    function startSpeakingTone(freq = 440) {
+      log(`🎙️ Started speaking test tone (${freq}Hz)`, "#38bdf8");
+      if (osc) {
+        try { osc.stop(); } catch {}
+      }
+      osc = audioCtx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gainNode.gain.value = 0.5; // active volume
+      osc.connect(gainNode);
+      osc.start();
+
+      updateSelfSpeaking(true);
+      socket?.emit("group:call:speaking", { groupId, speaking: true });
+    }
+
+    function stopSpeakingTone() {
+      log("🎙️ Stopped speaking test tone", "#94a3b8");
+      gainNode.gain.value = 0.00001;
+      if (osc) {
+        try { osc.stop(); } catch {}
+        osc = null;
+      }
+      updateSelfSpeaking(false);
+      socket?.emit("group:call:speaking", { groupId, speaking: false });
+    }
+
+    function updateSelfSpeaking(isSpeaking) {
+      const selfCard = document.getElementById("card-" + myUser.id);
+      if (selfCard) {
+        selfCard.classList.toggle("speaking", isSpeaking);
+        const ind = selfCard.querySelector(".speaking-indicator");
+        if (ind) ind.textContent = isSpeaking ? "🎤 Speaking..." : "Muted / Silent";
+      }
+    }
+
+    function updatePeerSpeaking(isSpeaking) {
+      const peerCard = document.getElementById("card-" + peerUser.id);
+      if (peerCard) {
+        peerCard.classList.toggle("speaking", isSpeaking);
+        const ind = peerCard.querySelector(".speaking-indicator");
+        if (ind) ind.textContent = isSpeaking ? "🎤 Speaking..." : "Listening";
+      }
+    }
+
+    function renderParticipants() {
+      participantsGrid.innerHTML = `
+        <div class="p-card" id="card-${myUser.id}">
+          <div class="avatar">${role === "userA" ? "A" : "B"}</div>
+          <div style="font-weight: 600;">${myUser.name} (You)</div>
+          <div class="speaking-indicator">Listening</div>
+          <div class="waveform">
+            <div class="wave-bar" style="height: 12px;"></div>
+            <div class="wave-bar" style="height: 18px;"></div>
+            <div class="wave-bar" style="height: 10px;"></div>
+            <div class="wave-bar" style="height: 16px;"></div>
+          </div>
+        </div>
+        <div class="p-card" id="card-${peerUser.id}">
+          <div class="avatar">${role === "userA" ? "B" : "A"}</div>
+          <div style="font-weight: 600;">${peerUser.name}</div>
+          <div class="speaking-indicator">Listening</div>
+          <div class="waveform">
+            <div class="wave-bar" style="height: 8px;"></div>
+            <div class="wave-bar" style="height: 14px;"></div>
+            <div class="wave-bar" style="height: 18px;"></div>
+            <div class="wave-bar" style="height: 6px;"></div>
+          </div>
+        </div>
+      `;
+    }
+
+    function setupPeerConnection() {
+      if (peerConn) {
+        try { peerConn.close(); } catch {}
+      }
+      peerConn = new RTCPeerConnection(rtcConfig);
+
+      localStream.getTracks().forEach(track => {
+        peerConn.addTrack(track, localStream);
+      });
+
+      peerConn.onicecandidate = (e) => {
+        if (e.candidate) {
+          socket.emit("group:call:ice-candidate", {
+            groupId,
+            toUserId: peerUser.id,
+            candidate: e.candidate.toJSON()
+          });
+        }
+      };
+
+      peerConn.onconnectionstatechange = () => {
+        log(`WebRTC connection state: ${peerConn.connectionState}`, "#38bdf8");
+        updateMetrics();
+      };
+
+      peerConn.ontrack = (e) => {
+        log(`👂 Remote audio track received from ${peerUser.name}!`, "#4ade80");
+        const remoteStream = e.streams[0] || new MediaStream([e.track]);
+        const audioEl = document.createElement("audio");
+        audioEl.srcObject = remoteStream;
+        audioEl.autoplay = true;
+        audioEl.play().catch(() => {});
+        document.body.appendChild(audioEl);
+
+        try {
+          const src = audioCtx.createMediaStreamSource(remoteStream);
+          remoteAudioAnalyser = audioCtx.createAnalyser();
+          remoteAudioAnalyser.fftSize = 256;
+          src.connect(remoteAudioAnalyser);
+        } catch (err) {
+          log("WebAudio analyser warning: " + err.message);
+        }
+      };
+
+      return peerConn;
+    }
+
+    let stats = {
+      bytesRecv: 0,
+      rms: 0,
+      heard: false,
+      webrtcState: "idle"
+    };
+
+    function startMetricsMonitoring() {
+      if (audioStatsTimer) clearInterval(audioStatsTimer);
+      audioStatsTimer = setInterval(async () => {
+        if (!peerConn) return;
+        stats.webrtcState = peerConn.connectionState;
+
+        const report = await peerConn.getStats();
+        report.forEach(stat => {
+          if (stat.type === "inbound-rtp" && stat.kind === "audio") {
+            stats.bytesRecv = stat.bytesReceived || 0;
+          }
+        });
+
+        if (remoteAudioAnalyser) {
+          const buf = new Uint8Array(remoteAudioAnalyser.frequencyBinCount);
+          remoteAudioAnalyser.getByteTimeDomainData(buf);
+          let sum = 0;
+          for (let i = 0; i < buf.length; i++) {
+            const v = (buf[i] - 128) / 128;
+            sum += v * v;
+          }
+          stats.rms = Math.sqrt(sum / buf.length);
+          if (stats.rms > 0.05) {
+            stats.heard = true;
+          }
+        }
+
+        updateMetrics();
+      }, 500);
+    }
+
+    function updateMetrics() {
+      metricsBody.innerHTML = `
+        <tr>
+          <td><strong>${peerUser.name}</strong></td>
+          <td><span class="${stats.webrtcState === 'connected' ? 'success-text' : ''}">${stats.webrtcState}</span></td>
+          <td>${stats.bytesRecv} bytes</td>
+          <td class="${stats.heard ? 'success-text' : ''}">${stats.heard ? "✅ YES (Ovoz boryapti)" : "Waiting for audio..."}</td>
+          <td>${stats.rms.toFixed(4)}</td>
+        </tr>
+      `;
+    }
+
+    // Connect to Socket.io
+    socket = io("http://localhost:4000", {
+      auth: { token: myUser.token },
+      transports: ["websocket"]
+    });
+
+    socket.on("connect", () => {
+      statusBadge.textContent = "Online / Ready";
+      statusBadge.classList.add("active");
+      log(`Connected to chat server as ${myUser.name}`, "#4ade80");
+    });
+
+    socket.on("group:call:speaking", (p) => {
+      if (p.groupId === groupId && p.userId === peerUser.id) {
+        updatePeerSpeaking(p.speaking);
+      }
+    });
+
+    socket.on("group:call:offer", async (p) => {
+      if (p.groupId !== groupId || p.fromUserId !== peerUser.id) return;
+      log(`Incoming group call offer from ${peerUser.name}!`, "#facc15");
+
+      statusBadge.textContent = "Incoming Call...";
+      statusBadge.classList.add("ringing");
+      callSubtitle.textContent = `${peerUser.name} is calling the group`;
+
+      callActionBtn.textContent = "✅ Accept & Join Call";
+      callActionBtn.style.background = "#3b82f6";
+      callActionBtn.onclick = async () => {
+        log("Accepting incoming call...", "#38bdf8");
+        const pc = setupPeerConnection();
+        await pc.setRemoteDescription(new RTCSessionDescription(p.sdp));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        socket.emit("group:call:answer", {
+          groupId,
+          toUserId: peerUser.id,
+          sdp: answer
+        });
+        socket.emit("group:call:join", { groupId });
+
+        inCall = true;
+        renderParticipants();
+        startMetricsMonitoring();
+        statusBadge.textContent = "In Call";
+        statusBadge.classList.remove("ringing");
+        statusBadge.classList.add("active");
+        callSubtitle.textContent = "Connected with " + peerUser.name;
+        callActionBtn.textContent = "🔴 End Call";
+        callActionBtn.className = "call-btn hangup";
+        callActionBtn.onclick = () => window.location.reload();
+      };
+    });
+
+    socket.on("group:call:answer", async (p) => {
+      if (p.groupId !== groupId || p.fromUserId !== peerUser.id) return;
+      log(`Call answered by ${peerUser.name}!`, "#4ade80");
+      if (peerConn) {
+        await peerConn.setRemoteDescription(new RTCSessionDescription(p.sdp));
+        inCall = true;
+        renderParticipants();
+        startMetricsMonitoring();
+        statusBadge.textContent = "In Call";
+        statusBadge.classList.add("active");
+        callSubtitle.textContent = "Connected with " + peerUser.name;
+        callActionBtn.textContent = "🔴 End Call";
+        callActionBtn.className = "call-btn hangup";
+        callActionBtn.onclick = () => window.location.reload();
+      }
+    });
+
+    socket.on("group:call:ice-candidate", async (p) => {
+      if (p.groupId !== groupId || p.fromUserId !== peerUser.id) return;
+      if (peerConn && p.candidate) {
+        try {
+          await peerConn.addIceCandidate(new RTCIceCandidate(p.candidate));
+        } catch {}
+      }
+    });
+
+    callActionBtn.onclick = async () => {
+      if (inCall) return;
+      log("Initiating group call to group...", "#38bdf8");
+      statusBadge.textContent = "Calling...";
+      statusBadge.classList.add("ringing");
+      callSubtitle.textContent = "Ringing " + peerUser.name + "...";
+
+      const pc = setupPeerConnection();
+      const offer = await pc.createOffer({ offerToReceiveAudio: true });
+      await pc.setLocalDescription(offer);
+
+      socket.emit("group:call:join", { groupId });
+      socket.emit("group:call:offer", {
+        groupId,
+        toUserId: peerUser.id,
+        sdp: offer
+      });
+
+      renderParticipants();
+      startMetricsMonitoring();
+    };
+
+    // Expose control functions to automated test script
+    window.__testCtrl = {
+      clickCall: () => callActionBtn.click(),
+      speak: (freq) => startSpeakingTone(freq),
+      stopSpeak: () => stopSpeakingTone(),
+      getStats: () => ({ ...stats, inCall })
+    };
+
+    // Auto-execution sequence if auto=true
+    if (params.get("auto") === "true") {
+      log("⚡ Auto-test mode enabled. Running scheduled sequence...", "#38bdf8");
+
+      if (role === "userA") {
+        // User A initiates call at t=2.5s
+        setTimeout(() => {
+          log("▶ [Auto] User A clicking Start Call...", "#38bdf8");
+          callActionBtn.click();
+        }, 2500);
+
+        // User A speaks at t=7s (440Hz)
+        setTimeout(() => {
+          log("▶ [Auto] User A speaking (440Hz test tone)...", "#4ade80");
+          startSpeakingTone(440);
+        }, 7000);
+
+        // User A stops speaking at t=12s
+        setTimeout(() => {
+          log("▶ [Auto] User A stopped speaking. Listening for User B...", "#facc15");
+          stopSpeakingTone();
+        }, 12000);
+
+        // User A posts final stats at t=19s
+        setTimeout(async () => {
+          log("▶ [Auto] User A posting test results to server...", "#38bdf8");
+          try {
+            await fetch("/api/report", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                role: "userA",
+                stats,
+                peerName: peerUser.name
+              })
+            });
+          } catch {}
+        }, 19000);
+      } else {
+        // User B auto-answers call when ringing
+        const checkRinging = setInterval(() => {
+          if (statusBadge.textContent.includes("Incoming") || statusBadge.classList.contains("ringing")) {
+            clearInterval(checkRinging);
+            setTimeout(() => {
+              log("▶ [Auto] User B answering and joining call...", "#38bdf8");
+              callActionBtn.click();
+            }, 1500);
+          }
+        }, 500);
+
+        // User B speaks at t=13s (880Hz)
+        setTimeout(() => {
+          log("▶ [Auto] User B speaking (880Hz test tone)...", "#4ade80");
+          startSpeakingTone(880);
+        }, 13000);
+
+        // User B stops speaking at t=18s
+        setTimeout(() => {
+          log("▶ [Auto] User B stopped speaking.", "#facc15");
+          stopSpeakingTone();
+        }, 18000);
+
+        // User B posts final stats at t=19.5s
+        setTimeout(async () => {
+          log("▶ [Auto] User B posting test results to server...", "#38bdf8");
+          try {
+            await fetch("/api/report", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                role: "userB",
+                stats,
+                peerName: peerUser.name
+              })
+            });
+          } catch {}
+        }, 19500);
+      }
+    }
+  </script>
+</body>
+</html>

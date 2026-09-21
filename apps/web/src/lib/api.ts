@@ -15,6 +15,29 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error?.response?.status === 401) {
+      const message = error.response.data?.message;
+      if (
+        !message ||
+        message.includes("Token") ||
+        message.includes("token") ||
+        message.includes("eskirgan") ||
+        message.includes("topilmadi")
+      ) {
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(
+            new CustomEvent("chat:auth:expired", { detail: { message } })
+          );
+        }
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 export function persistToken(token: string | null) {
   if (!token) {
     localStorage.removeItem(TOKEN_KEY);

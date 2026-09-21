@@ -1,0 +1,105 @@
+{
+  "connectionMatrix": {
+    "User A ↔ User B": {
+      "connectionState": "connected",
+      "iceConnectionState": "connected",
+      "bytesSent": 1981,
+      "bytesReceived": 1981,
+      "packetsSent": 34,
+      "packetsReceived": 34,
+      "rtt": "N/A"
+    },
+    "User A ↔ User C": {
+      "connectionState": "connected",
+      "iceConnectionState": "connected",
+      "bytesSent": 607,
+      "bytesReceived": 607,
+      "packetsSent": 15,
+      "packetsReceived": 15,
+      "rtt": "1.0ms"
+    },
+    "User B ↔ User C": {
+      "connectionState": "connected",
+      "iceConnectionState": "connected",
+      "bytesSent": 607,
+      "bytesReceived": 607,
+      "packetsSent": 15,
+      "packetsReceived": 15,
+      "rtt": "1.0ms"
+    }
+  },
+  "audioTestPhases": [
+    {
+      "speaker": "User A (Alice, 440Hz)",
+      "listenerB": {
+        "user": "User B (Bob)",
+        "rms": 0.6381,
+        "peakFreq": 422,
+        "maxAmplitude": 255,
+        "hasSignal": true,
+        "hasAnalyser": true,
+        "bytesReceived": 10158
+      },
+      "listenerC": {
+        "user": "User C (Charlie)",
+        "rms": 0.643,
+        "peakFreq": 422,
+        "maxAmplitude": 255,
+        "hasSignal": true,
+        "hasAnalyser": true,
+        "bytesReceived": 8834
+      },
+      "speakerBytesSent": 10158,
+      "pass": true
+    },
+    {
+      "speaker": "User B (Bob, 880Hz)",
+      "listenerA": {
+        "user": "User A (Alice)",
+        "rms": 0.6322,
+        "peakFreq": 891,
+        "maxAmplitude": 255,
+        "hasSignal": true,
+        "hasAnalyser": true,
+        "bytesReceived": 20641
+      },
+      "listenerC": {
+        "user": "User C (Charlie)",
+        "rms": 0.6391,
+        "peakFreq": 891,
+        "maxAmplitude": 255,
+        "hasSignal": true,
+        "hasAnalyser": true,
+        "bytesReceived": 19102
+      },
+      "speakerBytesSent": 20641,
+      "pass": true
+    },
+    {
+      "speaker": "User C (Charlie, 1320Hz)",
+      "listenerA": {
+        "user": "User A (Alice)",
+        "rms": 0.6356,
+        "peakFreq": 1313,
+        "maxAmplitude": 255,
+        "hasSignal": true,
+        "hasAnalyser": true,
+        "bytesReceived": 29632
+      },
+      "listenerB": {
+        "user": "User B (Bob)",
+        "rms": 0.6344,
+        "peakFreq": 1313,
+        "maxAmplitude": 255,
+        "hasSignal": true,
+        "hasAnalyser": true,
+        "bytesReceived": 29632
+      },
+      "speakerBytesSent": 29632,
+      "pass": true
+    }
+  ],
+  "speakingTest": true,
+  "summary": {},
+  "passed": true
+}

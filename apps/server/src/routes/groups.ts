@@ -1,4 +1,4 @@
-﻿import { GroupRole, MessageType } from "@prisma/client";
+import { GroupRole, MessageType } from "@prisma/client";
 import { RequestHandler, Router } from "express";
 import { Server } from "socket.io";
 import { z } from "zod";
@@ -38,7 +38,9 @@ const createMessageSchema = z
   .object({
     type: z.nativeEnum(MessageType).default(MessageType.TEXT),
     text: z.string().trim().min(1).max(4000).optional(),
-    fileUrl: z.string().url().optional(),
+    fileUrl: z.string().optional(),
+    thumbUrl: z.string().optional(),
+    replyToId: z.string().optional(),
     fileName: z.string().max(255).optional(),
     fileMime: z.string().max(120).optional(),
     fileSize: z.number().int().positive().max(200 * 1024 * 1024).optional(),
@@ -119,9 +121,41 @@ export function createGroupsRouter(io: Server) {
       include: groupInclude
     });
 
-    // Notify all members about the new group
+    const meUser = await prisma.user.findUnique({
+      where: { id: me.id },
+      select: { displayName: true }
+    });
+    const myName = meUser?.displayName || me.email;
+
+    const createMsg = await prisma.groupMessage.create({
+      data: {
+        groupId: group.id,
+        senderId: me.id,
+        type: MessageType.TEXT,
+        text: `${myName} "${name}" guruhini yaratdi`
+      },
+      include: {
+        replyTo: {
+          select: {
+            id: true,
+            senderId: true,
+            text: true,
+            type: true,
+            fileName: true,
+            fileUrl: true,
+            thumbUrl: true
+          }
+        },
+        sender: {
+          select: { id: true, email: true, displayName: true }
+        }
+      }
+    });
+
+    // Notify all members about the new group and initial system message
     for (const memberId of allMemberIds) {
       io.to(`user:${memberId}`).emit("group:created", group);
+      io.to(`user:${memberId}`).emit("group:message:new", createMsg);
     }
 
     return res.status(201).json({ group });
@@ -254,14 +288,56 @@ export function createGroupsRouter(io: Server) {
       }))
     });
 
+    const [meUser, newUsers] = await Promise.all([
+      prisma.user.findUnique({ where: { id: me.id }, select: { displayName: true } }),
+      prisma.user.findMany({
+        where: { id: { in: newMemberIds } },
+        select: { id: true, displayName: true }
+      })
+    ]);
+    const myName = meUser?.displayName || me.email;
+    const addedNames = newUsers.map((u) => u.displayName).join(", ");
+    const systemText = `${myName} ${addedNames} ni guruhga qo'shdi`;
+
+    const systemMsg = await prisma.groupMessage.create({
+      data: {
+        groupId,
+        senderId: me.id,
+        type: MessageType.TEXT,
+        text: systemText
+      },
+      include: {
+        replyTo: {
+          select: {
+            id: true,
+            senderId: true,
+            text: true,
+            type: true,
+            fileName: true,
+            fileUrl: true,
+            thumbUrl: true
+          }
+        },
+        sender: {
+          select: { id: true, email: true, displayName: true }
+        }
+      }
+    });
+
+    await prisma.group.update({
+      where: { id: groupId },
+      data: { updatedAt: new Date() }
+    });
+
     const group = await prisma.group.findUnique({
       where: { id: groupId },
       include: groupInclude
     });
 
-    // Notify all group members
+    // Notify all group members about updated group and new system message
     group?.members.forEach((m) => {
       io.to(`user:${m.userId}`).emit("group:updated", group);
+      io.to(`user:${m.userId}`).emit("group:message:new", systemMsg);
     });
 
     return res.json({ group });
@@ -389,9 +465,49 @@ export function createGroupsRouter(io: Server) {
       return res.status(403).json({ message: "Sizda a'zoni chiqarish huquqi yo'q." });
     }
 
+    const [meUser, targetUser] = await Promise.all([
+      prisma.user.findUnique({ where: { id: me.id }, select: { displayName: true } }),
+      prisma.user.findUnique({ where: { id: userId }, select: { id: true, displayName: true } })
+    ]);
+    const myName = meUser?.displayName || me.email;
+    const leaveText =
+      userId === me.id
+        ? `${targetUser?.displayName ?? "Foydalanuvchi"} guruhdan chiqdi`
+        : `${myName} ${targetUser?.displayName ?? "foydalanuvchi"}ni guruhdan chiqardi`;
+
     await prisma.groupMember.delete({
       where: { groupId_userId: { groupId, userId } }
     }).catch(() => null);
+
+    const systemMsg = await prisma.groupMessage.create({
+      data: {
+        groupId,
+        senderId: me.id,
+        type: MessageType.TEXT,
+        text: leaveText
+      },
+      include: {
+        replyTo: {
+          select: {
+            id: true,
+            senderId: true,
+            text: true,
+            type: true,
+            fileName: true,
+            fileUrl: true,
+            thumbUrl: true
+          }
+        },
+        sender: {
+          select: { id: true, email: true, displayName: true }
+        }
+      }
+    });
+
+    await prisma.group.update({
+      where: { id: groupId },
+      data: { updatedAt: new Date() }
+    });
 
     const group = await prisma.group.findUnique({
       where: { id: groupId },
@@ -401,6 +517,7 @@ export function createGroupsRouter(io: Server) {
     // Notify remaining members and the removed user
     group?.members.forEach((m) => {
       io.to(`user:${m.userId}`).emit("group:updated", group);
+      io.to(`user:${m.userId}`).emit("group:message:new", systemMsg);
     });
     io.to(`user:${userId}`).emit("group:removed", { groupId });
 
@@ -431,6 +548,17 @@ export function createGroupsRouter(io: Server) {
     const messages = await prisma.groupMessage.findMany({
       where: { groupId },
       include: {
+        replyTo: {
+          select: {
+            id: true,
+            senderId: true,
+            text: true,
+            type: true,
+            fileName: true,
+            fileUrl: true,
+            thumbUrl: true
+          }
+        },
         sender: {
           select: { id: true, email: true, displayName: true }
         },
@@ -484,6 +612,8 @@ export function createGroupsRouter(io: Server) {
         type: payload.type,
         text: payload.text,
         fileUrl: payload.fileUrl,
+        thumbUrl: payload.thumbUrl,
+        replyToId: payload.replyToId,
         fileName: payload.fileName,
         fileMime: payload.fileMime,
         fileSize: payload.fileSize,
@@ -492,6 +622,17 @@ export function createGroupsRouter(io: Server) {
         durationSec: payload.durationSec
       },
       include: {
+        replyTo: {
+          select: {
+            id: true,
+            senderId: true,
+            text: true,
+            type: true,
+            fileName: true,
+            fileUrl: true,
+            thumbUrl: true
+          }
+        },
         sender: {
           select: { id: true, email: true, displayName: true }
         }
@@ -515,6 +656,65 @@ export function createGroupsRouter(io: Server) {
     }
 
     return res.status(201).json({ message });
+  });
+
+  // Edit group message
+  router.patch("/:groupId/messages/:id", async (req, res) => {
+    const me = req.user!;
+    const { groupId, id } = req.params;
+    const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+
+    if (!text) {
+      return res.status(400).json({ message: "Xabar matni bo'sh bo'lishi mumkin emas." });
+    }
+
+    const message = await prisma.groupMessage.findUnique({
+      where: { id }
+    });
+
+    if (!message || message.groupId !== groupId || message.senderId !== me.id) {
+      return res.status(404).json({ message: "Xabar topilmadi yoki sizga tegishli emas." });
+    }
+
+    const hoursSince = (Date.now() - message.createdAt.getTime()) / (1000 * 60 * 60);
+    if (hoursSince > 48) {
+      return res.status(400).json({ message: "Xabarni faqat 48 soat ichida tahrirlash mumkin." });
+    }
+
+    const updated = await prisma.groupMessage.update({
+      where: { id },
+      data: {
+        text,
+        editedAt: new Date()
+      },
+      include: {
+        replyTo: {
+          select: {
+            id: true,
+            senderId: true,
+            text: true,
+            type: true,
+            fileName: true,
+            fileUrl: true,
+            thumbUrl: true
+          }
+        },
+        sender: {
+          select: { id: true, email: true, displayName: true }
+        }
+      }
+    });
+
+    const members = await prisma.groupMember.findMany({
+      where: { groupId },
+      select: { userId: true }
+    });
+
+    for (const m of members) {
+      io.to(`user:${m.userId}`).emit("group:message:edited", updated);
+    }
+
+    return res.json({ message: updated });
   });
 
   return router;

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import "express-async-errors";
 import cors from "cors";
 import express from "express";
@@ -12,6 +13,7 @@ import { authRouter } from "./routes/auth.js";
 import { uploadRouter } from "./routes/upload.js";
 import { usersRouter } from "./routes/users.js";
 import { registerSocketHandlers } from "./socket.js";
+import { getRecentEvents, getRecentLogs, getStats, subscribeLogs, subscribeMonitor } from "./lib/monitor.js";
 import { sendPushUpdateAvailableToAndroid } from "./lib/push.js";
 
 // Support multiple client origins (desktop + web + dev)
@@ -20,6 +22,8 @@ const allowedOrigins = env.CLIENT_URL.split(",").map((o) => o.trim());
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
+  pingTimeout: 60000,
+  pingInterval: 25000,
   cors: {
     origin: (_origin, cb) => cb(null, true),
     credentials: true
@@ -36,7 +40,15 @@ app.use(
   })
 );
 app.use(express.json({ limit: "10mb" }));
-app.use("/uploads", express.static(uploadDir));
+app.use(
+  "/uploads",
+  (_req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+    next();
+  },
+  express.static(uploadDir)
+);
 
 // Make io accessible to routes via req.app.get("io")
 app.set("io", io);
@@ -440,46 +452,77 @@ app.get("/health", (_, res) => {
   res.json({ status: "ok" });
 });
 
+// ── MONITOR DASHBOARD ──
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const monitorHtmlPath = path.join(__dirname, "monitor.html");
+
+app.get("/", (_req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  if (!fs.existsSync(monitorHtmlPath)) {
+    return res.status(404).send("monitor.html topilmadi");
+  }
+  res.sendFile(monitorHtmlPath);
+});
+
+app.get("/monitor", (_req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  if (!fs.existsSync(monitorHtmlPath)) {
+    return res.status(404).send("monitor.html topilmadi");
+  }
+  res.sendFile(monitorHtmlPath);
+});
+
+app.get("/monitor/api/stats", async (_req, res) => {
+  res.json(await getStats());
+});
+
+app.get("/monitor/api/events", (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 200, 2000);
+  res.json({ events: getRecentEvents(limit) });
+});
+
+app.get("/monitor/api/logs", (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 200, 2000);
+  res.json({ logs: getRecentLogs(limit) });
+});
+
+app.get("/monitor/stream", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders?.();
+
+  const send = (event: { type: string; data: Record<string, unknown>; id: number; ts: number }) => {
+    res.write(`event: ${event.type}\n`);
+    res.write(`id: ${event.id}\n`);
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+
+  const heartbeat = setInterval(() => res.write(": keepalive\n\n"), 25000);
+  const unsubscribe = subscribeMonitor(send);
+  const unsubscribeLogs = subscribeLogs((line) => {
+    res.write(`event: log\n`);
+    res.write(`id: ${line.id}\n`);
+    res.write(`data: ${JSON.stringify(line)}\n\n`);
+  });
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+    unsubscribeLogs();
+  });
+});
+
 app.use("/auth", authRouter);
 app.use("/users", usersRouter);
 app.use("/messages", createMessagesRouter(io));
 app.use("/groups", createGroupsRouter(io));
 app.use("/upload", uploadRouter);
-
-// Serve web client build (if exists)
-const webDistDir = path.resolve(process.cwd(), "web", "dist");
-if (fs.existsSync(webDistDir)) {
-  // Never cache sw.js and index.html
-  app.get("/sw.js", (_req, res) => {
-    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-    res.setHeader("Pragma", "no-cache");
-    res.setHeader("Expires", "0");
-    res.sendFile(path.join(webDistDir, "sw.js"));
-  });
-  // Cache hashed assets for 1 year
-  app.use("/assets", express.static(path.join(webDistDir, "assets"), {
-    maxAge: "1y",
-    immutable: true,
-  }));
-  app.use(express.static(webDistDir, {
-    setHeaders: (res, filePath) => {
-      if (filePath.endsWith("index.html")) {
-        res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-      }
-    },
-  }));
-  app.get("*", (_req, res, next) => {
-    // Only serve index.html for non-API routes
-    if (_req.path.startsWith("/auth") || _req.path.startsWith("/users") ||
-        _req.path.startsWith("/messages") || _req.path.startsWith("/upload") ||
-        _req.path.startsWith("/uploads") || _req.path.startsWith("/socket.io") ||
-        _req.path.startsWith("/health") || _req.path.startsWith("/update") ||
-        _req.path.startsWith("/og-meta")) {
-      return next();
-    }
-    res.sendFile(path.join(webDistDir, "index.html"));
-  });
-}
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error(error);
@@ -490,7 +533,4 @@ registerSocketHandlers(io);
 
 server.listen(env.PORT, () => {
   console.log(`Server running on http://localhost:${env.PORT}`);
-  if (fs.existsSync(webDistDir)) {
-    console.log(`Web client served at http://localhost:${env.PORT}`);
-  }
 });

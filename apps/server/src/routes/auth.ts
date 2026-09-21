@@ -16,8 +16,26 @@ import { addMinutes, generateSixDigitCode } from "../lib/codes.js";
 import { sendResetPasswordEmail, sendVerificationEmail } from "../lib/mailer.js";
 import { prisma } from "../lib/prisma.js";
 import { authRequired } from "../middleware/auth.js";
+import rateLimit from "express-rate-limit";
 
 const router = Router();
+
+// Rate limiters for security against brute-force attacks
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 daqiqa
+  max: 30, // 15 daqiqada ko'pi bilan 30 ta so'rov
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Juda ko'p urinishlar qilindi. Iltimos, 15 daqiqadan so'ng qayta urinib ko'ring." }
+});
+
+const codeLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 daqiqa
+  max: 10, // 5 daqiqada ko'pi bilan 10 ta urinish
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Xavfsizlik: Tasdiqlash kodi uchun juda ko'p urinishlar qilindi. 5 daqiqadan so'ng qayta urinib ko'ring." }
+});
 
 const registerSchema = z.object({
   email: z.string().email().toLowerCase(),
@@ -111,7 +129,7 @@ setTimeout(goBackToApp, 150);
 </script></body></html>`;
 }
 
-router.post("/register", async (req, res) => {
+router.post("/register", authLimiter, async (req, res) => {
   const parsed = registerSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: "Noto'g'ri so'rov ma'lumotlari." });
@@ -162,7 +180,7 @@ router.post("/register", async (req, res) => {
   return res.json({ message: "Tasdiqlash kodi emailingizga yuborildi." });
 });
 
-router.post("/verify-email", async (req, res) => {
+router.post("/verify-email", codeLimiter, async (req, res) => {
   const parsed = verifyEmailSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: "Noto'g'ri so'rov ma'lumotlari." });
@@ -188,6 +206,15 @@ router.post("/verify-email", async (req, res) => {
     }
   });
 
+  const io = req.app.get("io");
+  if (io) {
+    io.emit("presence:update", {
+      userId: updated.id,
+      isOnline: false,
+      lastSeenAt: new Date().toISOString()
+    });
+  }
+
   const token = signAccessToken(updated.id, updated.email);
 
   return res.json({
@@ -196,7 +223,7 @@ router.post("/verify-email", async (req, res) => {
   });
 });
 
-router.post("/login", async (req, res) => {
+router.post("/login", authLimiter, async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: "Noto'g'ri so'rov ma'lumotlari." });
@@ -232,7 +259,7 @@ router.post("/login", async (req, res) => {
   });
 });
 
-router.post("/login/2fa", async (req, res) => {
+router.post("/login/2fa", codeLimiter, async (req, res) => {
   const parsed = twoFALoginSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: "Noto'g'ri so'rov ma'lumotlari." });
@@ -318,11 +345,27 @@ router.post("/google", async (req, res) => {
         avatarUrl: googlePayload.picture || null,
       }
     });
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("presence:update", {
+        userId: user.id,
+        isOnline: false,
+        lastSeenAt: new Date().toISOString()
+      });
+    }
   } else if (!user.isEmailVerified) {
     user = await prisma.user.update({
       where: { id: user.id },
       data: { isEmailVerified: true }
     });
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("presence:update", {
+        userId: user.id,
+        isOnline: false,
+        lastSeenAt: new Date().toISOString()
+      });
+    }
   }
 
   const token = signAccessToken(user.id, user.email);
@@ -476,7 +519,7 @@ router.get("/google/poll", (req, res) => {
   return res.json({ ready: true, token: result.token, user: result.user });
 });
 
-router.post("/forgot-password", async (req, res) => {
+router.post("/forgot-password", authLimiter, async (req, res) => {
   const parsed = forgotPasswordSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: "Noto'g'ri so'rov ma'lumotlari." });
@@ -502,7 +545,7 @@ router.post("/forgot-password", async (req, res) => {
   });
 });
 
-router.post("/reset-password", async (req, res) => {
+router.post("/reset-password", codeLimiter, async (req, res) => {
   const parsed = resetPasswordSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: "Noto'g'ri so'rov ma'lumotlari." });

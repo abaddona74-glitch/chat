@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	AppVersion = "1.9.95"
+	AppVersion = "2.0.8"
 	UpdateURL  = "https://mytelegramchat.ddns.net"
 )
 

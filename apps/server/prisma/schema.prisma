@@ -88,20 +88,28 @@ model Message {
   type        MessageType @default(TEXT)
   text        String?
   fileUrl     String?
+  thumbUrl    String?
   fileName    String?
   fileMime    String?
   fileSize    Int?
   latitude    Float?
   longitude   Float?
   durationSec Int?
+  replyToId   String?
+  replyTo     Message?    @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies     Message[]   @relation("MessageReplies")
+  editedAt    DateTime?
   readAt      DateTime?
-  seenAt      DateTime?
-  createdAt   DateTime    @default(now())
-  sender      User        @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
-  recipient   User        @relation("ReceivedMessages", fields: [recipientId], references: [id], onDelete: Cascade)
+  seenAt              DateTime?
+  deletedForSender    Boolean     @default(false)
+  deletedForRecipient Boolean     @default(false)
+  createdAt           DateTime    @default(now())
+  sender              User        @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient           User        @relation("ReceivedMessages", fields: [recipientId], references: [id], onDelete: Cascade)
 
   @@index([senderId, recipientId, createdAt])
   @@index([recipientId, senderId, createdAt])
+  @@index([replyToId])
 }
 
 model Group {
@@ -135,18 +143,24 @@ model GroupMessage {
   type        MessageType @default(TEXT)
   text        String?
   fileUrl     String?
+  thumbUrl    String?
   fileName    String?
   fileMime    String?
   fileSize    Int?
   latitude    Float?
   longitude   Float?
   durationSec Int?
+  replyToId   String?
+  replyTo     GroupMessage? @relation("GroupMessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies     GroupMessage[] @relation("GroupMessageReplies")
+  editedAt    DateTime?
   createdAt   DateTime    @default(now())
   group       Group       @relation(fields: [groupId], references: [id], onDelete: Cascade)
   sender      User        @relation("GroupMessageSender", fields: [senderId], references: [id], onDelete: Cascade)
   seenBy      GroupMessageSeen[]
 
   @@index([groupId, createdAt])
+  @@index([replyToId])
 }
 
 model GroupMessageSeen {

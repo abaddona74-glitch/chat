@@ -275,6 +275,22 @@ function App() {
     disconnectSocket(socketRef);
   }, []);
 
+  useEffect(() => {
+    const handleAuthExpired = (event: Event) => {
+      const customEvent = event as CustomEvent<{ message?: string }>;
+      const msg =
+        customEvent.detail?.message ||
+        "Sessiya eskirgan yoki bekor qilingan. Iltimos, qaytadan kiring.";
+      toast.error(msg);
+      clearSession();
+    };
+
+    window.addEventListener("chat:auth:expired", handleAuthExpired);
+    return () => {
+      window.removeEventListener("chat:auth:expired", handleAuthExpired);
+    };
+  }, [clearSession]);
+
   // ── GOOGLE SIGN-IN ──
   const googleBtnRef = useRef<HTMLDivElement>(null);
 
@@ -545,6 +561,11 @@ function App() {
   const attachChatHandlers = useCallback(
     (socket: Socket) => {
       socket.on("presence:update", (payload: PresencePayload) => {
+        const isKnown = usersRef.current.some((user) => user.id === payload.userId);
+        if (!isKnown && payload.userId !== currentUser?.id) {
+          fetchUsers().catch(() => undefined);
+          return;
+        }
         setUsers((prev) =>
           prev.map((user) =>
             user.id === payload.userId
@@ -570,6 +591,10 @@ function App() {
       });
 
       socket.on("user:profile-updated", (payload: { userId: string; displayName: string; username: string | null; avatarUrl: string | null }) => {
+        const isKnown = usersRef.current.some((user) => user.id === payload.userId);
+        if (!isKnown && payload.userId !== currentUser?.id) {
+          fetchUsers().catch(() => undefined);
+        }
         setUsers((prev) =>
           prev.map((user) =>
             user.id === payload.userId
@@ -649,13 +674,21 @@ function App() {
     (socket: Socket) => {
       socket.on("group:created", (group: Group) => {
         setGroups((prev) => {
-          if (prev.some((g) => g.id === group.id)) return prev;
+          if (prev.some((g) => g.id === group.id)) {
+            return prev.map((g) => (g.id === group.id ? group : g));
+          }
           return [group, ...prev];
         });
       });
 
       socket.on("group:updated", (group: Group) => {
-        setGroups((prev) => prev.map((g) => (g.id === group.id ? group : g)));
+        setGroups((prev) => {
+          const exists = prev.some((g) => g.id === group.id);
+          if (!exists) {
+            return [group, ...prev];
+          }
+          return prev.map((g) => (g.id === group.id ? group : g));
+        });
       });
 
       socket.on("group:removed", (payload: { groupId: string }) => {

@@ -4,13 +4,13 @@ import { getClientType } from "../platform/bridge";
 
 export function createSocket(token: string, clientVersion?: string): Socket {
   return io(API_URL, {
-    transports: ["websocket"],
+    transports: ["websocket", "polling"],
     reconnection: true,
     reconnectionAttempts: Infinity,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000,
-    randomizationFactor: 0.5,
-    timeout: 20000,
+    reconnectionDelay: 800,
+    reconnectionDelayMax: 3000,
+    randomizationFactor: 0.3,
+    timeout: 10000,
     auth: {
       token,
       clientType: getClientType(),

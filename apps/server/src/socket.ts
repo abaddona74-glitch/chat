@@ -83,6 +83,38 @@ const recipientSchema = z.object({
   recipientId: z.string().min(1)
 });
 
+const scheduleMessageSchema = z
+  .object({
+    chatMode: z.enum(["user", "group"]).default("user"),
+    recipientId: z.string().optional(),
+    groupId: z.string().optional(),
+    type: z.nativeEnum(MessageType).default(MessageType.TEXT),
+    text: z.string().trim().min(1).max(4000).optional(),
+    fileUrl: z.string().min(1).optional(),
+    thumbUrl: z.string().optional(),
+    replyToId: z.string().optional(),
+    fileName: z.string().max(255).optional(),
+    fileMime: z.string().max(120).optional(),
+    fileSize: z.number().int().positive().max(200 * 1024 * 1024).optional(),
+    latitude: z.number().min(-90).max(90).optional(),
+    longitude: z.number().min(-180).max(180).optional(),
+    durationSec: z.number().int().positive().max(36000).optional(),
+    silent: z.boolean().optional(),
+    delaySeconds: z.number().int().min(1).max(365 * 86400).optional(),
+    sendAt: z.string().optional()
+  })
+  .superRefine((value, ctx) => {
+    if (value.chatMode === "group" && !value.groupId) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Guruh xabari uchun groupId kerak." });
+    }
+    if (value.chatMode === "user" && !value.recipientId) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Foydalanuvchi xabari uchun recipientId kerak." });
+    }
+    if (value.type === MessageType.TEXT && !value.text) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "TEXT uchun text kerak." });
+    }
+  });
+
 const groupMessageSeenSchema = z.object({
   groupId: z.string().min(1),
   messageIds: z.array(z.string().min(1)).max(200).optional()
@@ -321,6 +353,82 @@ export function registerSocketHandlers(io: Server) {
         data: { statusText: text, statusEmoji: emoji }
       }).catch(() => undefined);
       io.emit("status:changed", { userId, statusText: text, statusEmoji: emoji });
+    });
+
+    socket.on("user:zerotier:sync", async (payload: { networks?: any[] }) => {
+      const networks = Array.isArray(payload?.networks) ? payload.networks : [];
+      const infoStr = networks.length > 0 ? JSON.stringify(networks) : null;
+      await prisma.user
+        .update({
+          where: { id: userId },
+          data: { zerotierInfo: infoStr }
+        })
+        .catch(() => undefined);
+
+      io.emit("user:zerotier:updated", {
+        userId,
+        zerotierNetworks: networks
+      });
+    });
+
+    // ── P2P ZeroTier File Transfer Signaling ──
+    socket.on("p2p:transfer-request", (payload: {
+      toUserId: string;
+      transferId: string;
+      fileName: string;
+      fileSize: number;
+      senderName?: string;
+    }) => {
+      if (!payload?.toUserId || !payload?.transferId) return;
+      io.to(`user:${payload.toUserId}`).emit("p2p:incoming-transfer", {
+        fromUserId: userId,
+        transferId: payload.transferId,
+        fileName: payload.fileName,
+        fileSize: payload.fileSize,
+        senderName: payload.senderName
+      });
+    });
+
+    socket.on("p2p:transfer-accept", (payload: {
+      toUserId: string;
+      transferId: string;
+      receiverIp: string;
+      port: number;
+      secretToken: string;
+    }) => {
+      if (!payload?.toUserId || !payload?.transferId) return;
+      io.to(`user:${payload.toUserId}`).emit("p2p:transfer-accepted", {
+        fromUserId: userId,
+        transferId: payload.transferId,
+        receiverIp: payload.receiverIp,
+        port: payload.port,
+        secretToken: payload.secretToken
+      });
+    });
+
+    socket.on("p2p:transfer-decline", (payload: { toUserId: string; transferId: string; reason?: string }) => {
+      if (!payload?.toUserId || !payload?.transferId) return;
+      io.to(`user:${payload.toUserId}`).emit("p2p:transfer-declined", {
+        fromUserId: userId,
+        transferId: payload.transferId,
+        reason: payload.reason || "Rad etildi"
+      });
+    });
+
+    socket.on("p2p:transfer-cancel", (payload: { toUserId: string; transferId: string }) => {
+      if (!payload?.toUserId || !payload?.transferId) return;
+      io.to(`user:${payload.toUserId}`).emit("p2p:transfer-cancelled", {
+        fromUserId: userId,
+        transferId: payload.transferId
+      });
+    });
+
+    socket.on("p2p:transfer-complete", (payload: { toUserId: string; transferId: string }) => {
+      if (!payload?.toUserId || !payload?.transferId) return;
+      io.to(`user:${payload.toUserId}`).emit("p2p:transfer-completed", {
+        fromUserId: userId,
+        transferId: payload.transferId
+      });
     });
 
     socket.on("message:send", async (rawPayload: unknown, ack?: AckFn) => {
@@ -784,6 +892,103 @@ export function registerSocketHandlers(io: Server) {
       });
 
       ack?.({ ok: true, message });
+    });
+
+    // ── SCHEDULED MESSAGES (Server-side automatic send) ──
+    socket.on("message:schedule", async (rawPayload: unknown, ack?: AckFn) => {
+      const parsed = scheduleMessageSchema.safeParse(rawPayload);
+      if (!parsed.success) {
+        ack?.({ ok: false, error: parsed.error.issues[0]?.message || "Xabar parametrlari noto'g'ri." });
+        return;
+      }
+
+      const payload = parsed.data;
+      let targetSendAt: Date;
+      if (payload.sendAt) {
+        targetSendAt = new Date(payload.sendAt);
+        if (isNaN(targetSendAt.getTime())) {
+          targetSendAt = new Date(Date.now() + (payload.delaySeconds || 10) * 1000);
+        }
+      } else {
+        targetSendAt = new Date(Date.now() + (payload.delaySeconds || 10) * 1000);
+      }
+
+      if (payload.chatMode === "user" && payload.recipientId) {
+        const recipient = await prisma.user.findFirst({
+          where: { id: payload.recipientId, isEmailVerified: true },
+          select: { id: true }
+        });
+        if (!recipient) {
+          ack?.({ ok: false, error: "Qabul qiluvchi topilmadi." });
+          return;
+        }
+      } else if (payload.chatMode === "group" && payload.groupId) {
+        const membership = await prisma.groupMember.findUnique({
+          where: { groupId_userId: { groupId: payload.groupId, userId } },
+          select: { userId: true }
+        });
+        if (!membership) {
+          ack?.({ ok: false, error: "Siz bu guruh a'zosi emassiz." });
+          return;
+        }
+      }
+
+      const scheduled = await prisma.scheduledMessage.create({
+        data: {
+          senderId: userId,
+          recipientId: payload.chatMode === "user" ? payload.recipientId : null,
+          groupId: payload.chatMode === "group" ? payload.groupId : null,
+          type: payload.type,
+          text: payload.text,
+          fileUrl: payload.fileUrl,
+          thumbUrl: payload.thumbUrl,
+          fileName: payload.fileName,
+          fileMime: payload.fileMime,
+          fileSize: payload.fileSize,
+          latitude: payload.latitude,
+          longitude: payload.longitude,
+          durationSec: payload.durationSec,
+          replyToId: payload.replyToId,
+          silent: Boolean(payload.silent),
+          sendAt: targetSendAt,
+          status: "PENDING"
+        }
+      });
+
+      io.to(`user:${userId}`).emit("scheduled:created", scheduled);
+      ack?.({ ok: true, message: scheduled });
+    });
+
+    socket.on("scheduled:cancel", async (payload: { id: string }, ack?: AckFn) => {
+      if (!payload?.id) {
+        ack?.({ ok: false, error: "ID berilmagan." });
+        return;
+      }
+
+      const existing = await prisma.scheduledMessage.findFirst({
+        where: { id: payload.id, senderId: userId, status: "PENDING" }
+      });
+
+      if (!existing) {
+        ack?.({ ok: false, error: "Rejalashtirilgan xabar topilmadi yoki allaqachon yuborilgan." });
+        return;
+      }
+
+      await prisma.scheduledMessage.update({
+        where: { id: payload.id },
+        data: { status: "CANCELLED" }
+      });
+
+      io.to(`user:${userId}`).emit("scheduled:cancelled", { id: payload.id });
+      ack?.({ ok: true });
+    });
+
+    socket.on("scheduled:list", async (ack?: AckFn) => {
+      const items = await prisma.scheduledMessage.findMany({
+        where: { senderId: userId, status: "PENDING" },
+        orderBy: { sendAt: "asc" }
+      });
+      ack?.({ ok: true, message: items });
     });
 
     socket.on("group:message:seen", async (rawPayload: unknown, ack?: AckFn) => {

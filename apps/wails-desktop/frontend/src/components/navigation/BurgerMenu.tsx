@@ -1,5 +1,13 @@
 import React from "react";
 import toast from "react-hot-toast";
+import {
+  Profile2User,
+  Bookmark2,
+  Setting2,
+  Lock1,
+  LogoutCurve,
+} from "iconsax-react";
+import { OpenInstagramWindow } from "../../platform/bridge";
 import { API_URL } from "../../lib/api";
 import { PublicUser } from "../../types";
 import { getInitialLetter, hasUsableAvatar } from "../../utils/formatters";
@@ -16,6 +24,7 @@ export interface BurgerMenuProps {
   onOpenCreateGroup: () => void;
   onOpenSavedMessages: () => void;
   onOpenSettings: () => void;
+  onOpenSecurityPasscode?: () => void;
   appLockEnabled: boolean;
   onLockApp: () => void;
   onLogout: () => void;
@@ -33,6 +42,7 @@ export function BurgerMenu(props: BurgerMenuProps) {
     onOpenCreateGroup,
     onOpenSavedMessages,
     onOpenSettings,
+    onOpenSecurityPasscode,
     appLockEnabled,
     onLockApp,
     onLogout,
@@ -92,7 +102,8 @@ export function BurgerMenu(props: BurgerMenuProps) {
               onClose();
             }}
           >
-            ➕ Create Group
+            <Profile2User size="20" variant="Linear" />
+            <span>Create Group</span>
           </button>
           <button
             className="sidebar-menu-item"
@@ -101,7 +112,8 @@ export function BurgerMenu(props: BurgerMenuProps) {
               onClose();
             }}
           >
-            🔖 Saved Messages
+            <Bookmark2 size="20" variant="Linear" />
+            <span>Saved Messages</span>
           </button>
           <button
             className="sidebar-menu-item"
@@ -110,7 +122,8 @@ export function BurgerMenu(props: BurgerMenuProps) {
               onClose();
             }}
           >
-            ⚙️ Settings
+            <Setting2 size="20" variant="Linear" />
+            <span>Settings</span>
           </button>
           <button
             className="sidebar-menu-item"
@@ -119,14 +132,18 @@ export function BurgerMenu(props: BurgerMenuProps) {
                 onLockApp();
                 onClose();
               } else {
-                toast("Set a passcode in settings first.");
+                onClose();
+                onOpenSecurityPasscode?.();
               }
             }}
+            title={appLockEnabled ? "Ilovani qulflash" : "Parol o'rnatish"}
           >
-            🔒 Lock
+            <Lock1 size="20" variant="Linear" />
+            <span>Lock</span>
           </button>
           <button className="sidebar-menu-item" onClick={onLogout}>
-            🚪 Logout
+            <LogoutCurve size="20" variant="Linear" color="#f43f5e" />
+            <span style={{ color: "#f43f5e" }}>Logout</span>
           </button>
         </div>
 

@@ -2,6 +2,8 @@ import React from "react";
 import toast from "react-hot-toast";
 import { API_URL } from "../../lib/api";
 import { Message, GroupMessage } from "../../types";
+import { BrowserOpenURL, OpenMiniBrowser } from "../../platform/bridge";
+import { URL_REGEX } from "../../utils/linkUtils";
 
 export interface ChatContextMenuState {
   x: number;
@@ -26,6 +28,8 @@ export interface ChatContextMenuProps {
   onToggleArchive: (chatId: string) => void;
   onClearHistory: (chatId: string) => Promise<void>;
   onRemoveChat: (chatId: string, type: "user" | "group") => Promise<void>;
+  isExpectedAutoAnswer?: boolean;
+  onToggleAutoAnswerExpected?: (userId: string) => void;
 }
 
 export function ChatContextMenu({
@@ -37,6 +41,8 @@ export function ChatContextMenu({
   onToggleArchive,
   onClearHistory,
   onRemoveChat,
+  isExpectedAutoAnswer,
+  onToggleAutoAnswerExpected,
 }: ChatContextMenuProps) {
   if (!contextMenu) return null;
 
@@ -65,6 +71,18 @@ export function ChatContextMenu({
             ? "📦 Unarchive"
             : "📦 Archive"}
         </button>
+        {contextMenu.type === "user" && onToggleAutoAnswerExpected && (
+          <button
+            onClick={() => {
+              onToggleAutoAnswerExpected(contextMenu.chatId);
+              onClose();
+            }}
+          >
+            {isExpectedAutoAnswer
+              ? "⚡ Kutish ro'yxatidan chiqarish"
+              : "🤖 Avto-javobgichda kutish"}
+          </button>
+        )}
         {contextMenu.type === "user" && (
           <button
             className="context-menu-danger"
@@ -127,6 +145,16 @@ export function MessageContextMenu({
 }: MessageContextMenuProps) {
   if (!msgContextMenu) return null;
 
+  const text = msgContextMenu.message.text || "";
+  const foundUrls: string[] = [];
+  let m: RegExpExecArray | null;
+  const re = new RegExp(URL_REGEX.source, "gi");
+  while ((m = re.exec(text)) !== null) {
+    if (!foundUrls.includes(m[0])) {
+      foundUrls.push(m[0]);
+    }
+  }
+
   return (
     <>
       <div className="context-menu-backdrop" onClick={onClose} />
@@ -182,6 +210,46 @@ export function MessageContextMenu({
         >
           ↪️ Forward message
         </button>
+
+        {/* Link Actions */}
+        {foundUrls.map((targetUrl, idx) => {
+          let host = "havola";
+          try {
+            host = new URL(targetUrl).hostname.replace(/^www\./, "");
+          } catch {}
+
+          return (
+            <React.Fragment key={targetUrl + idx}>
+              <button
+                onClick={() => {
+                  OpenMiniBrowser(targetUrl);
+                  onClose();
+                }}
+                title={`Mini-brauzerda ochish: ${targetUrl}`}
+              >
+                🌐 Mini-brauzerda ochish ({host})
+              </button>
+              <button
+                onClick={() => {
+                  BrowserOpenURL(targetUrl);
+                  onClose();
+                }}
+                title={`Tashqi tizim brauzerida ochish: ${targetUrl}`}
+              >
+                ↗️ Tizim brauzerida ochish ({host})
+              </button>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(targetUrl);
+                  onClose();
+                  toast.success("Havola nusxalandi!");
+                }}
+              >
+                🔗 Havolani nusxalash
+              </button>
+            </React.Fragment>
+          );
+        })}
 
         {msgContextMenu.message.text && (
           <button

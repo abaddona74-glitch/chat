@@ -98,6 +98,8 @@ export function AudioWaveformPlayer({
     }
   }, [waveformData, progress, isMine]);
 
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
+
   const togglePlay = () => {
     const queueIndex =
       voiceQueue?.findIndex((item) => item.id === messageId) ?? -1;
@@ -118,6 +120,13 @@ export function AudioWaveformPlayer({
     });
   };
 
+  const toggleSpeed = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const nextSpeed = playbackSpeed === 1 ? 1.5 : playbackSpeed === 1.5 ? 2 : 1;
+    setPlaybackSpeed(nextSpeed);
+    sendMusicCommand({ type: "setSpeed", speed: nextSpeed });
+  };
+
   const dur = durationSec ?? 0;
   const fmtTime = (s: number) =>
     `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -131,6 +140,14 @@ export function AudioWaveformPlayer({
       <span className="wave-time">
         {isPlaying ? fmtTime(Math.floor(currentTime)) : fmtTime(dur)}
       </span>
+      <button
+        type="button"
+        className="wave-speed-btn"
+        onClick={toggleSpeed}
+        title="Ovoz tezligi (1x / 1.5x / 2x)"
+      >
+        {playbackSpeed}x
+      </button>
     </div>
   );
 }

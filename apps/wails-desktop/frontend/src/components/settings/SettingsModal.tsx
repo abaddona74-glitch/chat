@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback, useEffect } from "react";
 import toast from "react-hot-toast";
 import { api } from "../../lib/api";
 import { DEFAULT_RINGTONE_URL } from "../../lib/callSounds";
@@ -7,6 +7,8 @@ import {
   LocalThemeProfile,
   CommunityThemeProfile,
   UpdateHistoryEntry,
+  ZeroTierNetwork,
+  AutoAnswerConfig,
 } from "../../types";
 import {
   GetProxyConfig,
@@ -16,6 +18,7 @@ import {
   SetCloseToTray,
   CheckForUpdate,
   FetchPublicIp,
+  GetZeroTierNetworks,
   OpenDevTools,
   isWailsRuntime,
 } from "../../platform/bridge";
@@ -92,6 +95,82 @@ function compressImageDataUrl(
   });
 }
 
+export interface TelegramThemePreset {
+  id: string;
+  name: string;
+  previewBg: string;
+  previewIncoming: string;
+  previewOutgoing: string;
+  accentColor: string;
+  layoutColor: string;
+  textColor: string;
+  backgroundColor: string;
+  inputColor: string;
+}
+
+export const TELEGRAM_THEMES: TelegramThemePreset[] = [
+  {
+    id: "classic",
+    name: "Classic",
+    previewBg: "#99b882",
+    previewIncoming: "#ffffff",
+    previewOutgoing: "#e2f7cb",
+    accentColor: "#4fae63",
+    layoutColor: "#ffffff",
+    textColor: "#222222",
+    backgroundColor: "#cce5af",
+    inputColor: "#ffffff",
+  },
+  {
+    id: "day",
+    name: "Day",
+    previewBg: "#70b1e8",
+    previewIncoming: "#ffffff",
+    previewOutgoing: "#55a4ec",
+    accentColor: "#2f8ee8",
+    layoutColor: "#ffffff",
+    textColor: "#111827",
+    backgroundColor: "#8fc4f3",
+    inputColor: "#ffffff",
+  },
+  {
+    id: "tinted",
+    name: "Tinted",
+    previewBg: "#43323e",
+    previewIncoming: "#2a2228",
+    previewOutgoing: "#874d6c",
+    accentColor: "#be608f",
+    layoutColor: "#221c21",
+    textColor: "#f5e6ee",
+    backgroundColor: "#2e242c",
+    inputColor: "#1d171c",
+  },
+  {
+    id: "night",
+    name: "Night",
+    previewBg: "#0e1621",
+    previewIncoming: "#182533",
+    previewOutgoing: "#2b5278",
+    accentColor: "#0088cc",
+    layoutColor: "#17212b",
+    textColor: "#f8fafc",
+    backgroundColor: "#0e1621",
+    inputColor: "#17212b",
+  },
+];
+
+const TELEGRAM_ACCENTS = [
+  "#0088cc",
+  "#2f8ee8",
+  "#0e7c66",
+  "#22c55e",
+  "#f97316",
+  "#ef4444",
+  "#a855f7",
+  "#ec4899",
+  "#64748b",
+];
+
 const ACCENT_COLOR_PRESETS = [
   "#0e7c66",
   "#3b82f6",
@@ -153,6 +232,8 @@ export interface SettingsModalProps {
   previewDialTone: () => void;
   resetCustomDialTone: () => void;
   handleDialToneUpload: (file: File) => Promise<void>;
+  onOpenAutoAnswer?: () => void;
+  autoAnswerConfig?: AutoAnswerConfig;
 
   // Design Settings
   themeAccentColor: string;
@@ -208,6 +289,9 @@ export interface SettingsModalProps {
   probeAllIceServers: () => Promise<IceProbeResult[]>;
   iceProbeResults: IceProbeResult[];
   setIceProbeResults: (val: IceProbeResult[]) => void;
+
+  initialCategory?: "general" | "call" | "design" | "security" | "developer";
+  initialShowSetPasscode?: boolean;
 }
 
 export function SettingsModal(props: SettingsModalProps) {
@@ -243,6 +327,8 @@ export function SettingsModal(props: SettingsModalProps) {
     previewDialTone,
     resetCustomDialTone,
     handleDialToneUpload,
+    onOpenAutoAnswer,
+    autoAnswerConfig,
     themeAccentColor,
     setThemeAccentColor,
     themeLayoutColor,
@@ -295,7 +381,23 @@ export function SettingsModal(props: SettingsModalProps) {
   // Internal tab state
   const [settingsCategory, setSettingsCategory] = useState<
     "general" | "call" | "design" | "security" | "developer"
-  >("general");
+  >(() => props.initialCategory || "general");
+
+  // Passcode modal internal state
+  const [showSetPasscode, setShowSetPasscode] = useState(
+    () => Boolean(props.initialShowSetPasscode)
+  );
+
+  useEffect(() => {
+    if (isOpen) {
+      if (props.initialCategory) {
+        setSettingsCategory(props.initialCategory);
+      }
+      if (props.initialShowSetPasscode) {
+        setShowSetPasscode(true);
+      }
+    }
+  }, [isOpen, props.initialCategory, props.initialShowSetPasscode]);
 
   // Developer unlock state
   const [developerUnlocked, setDeveloperUnlocked] = useState(
@@ -321,8 +423,6 @@ export function SettingsModal(props: SettingsModalProps) {
     });
   }, [developerUnlocked]);
 
-  // Passcode modal internal state
-  const [showSetPasscode, setShowSetPasscode] = useState(false);
   const [newPasscode, setNewPasscode] = useState("");
   const [confirmPasscode, setConfirmPasscode] = useState("");
 
@@ -388,9 +488,23 @@ export function SettingsModal(props: SettingsModalProps) {
     }
   };
 
-  // Network public IP state
+  // Network public IP & ZeroTier state
   const [publicIp, setPublicIp] = useState<string>("");
   const [ipLoading, setIpLoading] = useState(false);
+  const [zerotierNetworks, setZerotierNetworks] = useState<ZeroTierNetwork[]>([]);
+  const [ztLoading, setZtLoading] = useState(false);
+
+  const fetchZeroTier = useCallback(async () => {
+    setZtLoading(true);
+    try {
+      const nets = await GetZeroTierNetworks();
+      setZerotierNetworks(Array.isArray(nets) ? (nets as ZeroTierNetwork[]) : []);
+    } catch {
+      setZerotierNetworks([]);
+    } finally {
+      setZtLoading(false);
+    }
+  }, []);
 
   const fetchPublicIp = async () => {
     setIpLoading(true);
@@ -446,6 +560,8 @@ export function SettingsModal(props: SettingsModalProps) {
         ref={(el) => {
           if (el && !proxyLoaded && isWails) {
             setProxyLoaded(true);
+            void fetchPublicIp();
+            void fetchZeroTier();
             GetProxyConfig()
               .then((cfg: any) => {
                 setProxyEnabled(!!cfg.enabled);
@@ -812,133 +928,329 @@ export function SettingsModal(props: SettingsModalProps) {
                   }}
                 />
               </div>
-            </>
-          )}
 
-          {settingsCategory === "design" && (
-            <>
+              {/* ── AVTO-JAVOBGICH SECTION ── */}
               <div
                 className="settings-row"
                 style={{
                   alignItems: "flex-start",
                   flexDirection: "column",
-                  gap: 12,
+                  gap: 10,
+                  borderTop: "1px solid rgba(255,255,255,0.08)",
+                  paddingTop: 16,
                 }}
               >
-                <span>🎨 Theme designer (real-time)</span>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    width: "100%",
+                  }}
+                >
+                  <div>
+                    <span style={{ fontWeight: 600 }}>
+                      🤖 Avto-javobgich (Kutish rejimi)
+                    </span>
+                    <div
+                      style={{
+                        fontSize: 12,
+                        opacity: 0.72,
+                        marginTop: 2,
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      Zarur ish bilan uzoqlashganingizda, kutayotgan do'stlaringizga Microsoft O'zbekcha Sardor ovozi bilan avto javob beradi
+                    </div>
+                  </div>
+                  {autoAnswerConfig?.enabled && (
+                    <span
+                      style={{
+                        fontSize: 11,
+                        background: "#22c55e",
+                        color: "#fff",
+                        padding: "2px 8px",
+                        borderRadius: 10,
+                        fontWeight: 700,
+                      }}
+                    >
+                      FAOL
+                    </span>
+                  )}
+                </div>
+                <button
+                  className="settings-btn primary"
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenAutoAnswer?.();
+                  }}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+                >
+                  ⚙️ Avto-javobgich sozlamalarini ochish
+                </button>
+              </div>
+            </>
+          )}
 
-                <div className="settings-color-group">
-                  <span className="settings-color-label">
-                    Accent / Circle colors
+          {settingsCategory === "design" && (
+            <>
+              {/* ── TELEGRAM-STYLE CHAT SETTINGS & THEMES ── */}
+              <div
+                className="settings-row"
+                style={{
+                  alignItems: "flex-start",
+                  flexDirection: "column",
+                  gap: 14,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    width: "100%",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: 14,
+                      fontWeight: 700,
+                      color: "var(--text-primary, #f8fafc)",
+                    }}
+                  >
+                    🎨 Themes (Mavzular)
                   </span>
-                  <div className="settings-color-swatches">
-                    {ACCENT_COLOR_PRESETS.map((color) => (
+                  <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                    Jonli ko'rinish
+                  </span>
+                </div>
+
+                {/* 4 Telegram Theme Cards */}
+                <div className="tg-theme-cards-grid">
+                  {TELEGRAM_THEMES.map((theme) => {
+                    const isSelected =
+                      themeBackgroundColor.toLowerCase() ===
+                        theme.backgroundColor.toLowerCase() &&
+                      themeLayoutColor.toLowerCase() ===
+                        theme.layoutColor.toLowerCase();
+                    return (
+                      <button
+                        key={theme.id}
+                        type="button"
+                        className={`tg-theme-card${isSelected ? " active" : ""}`}
+                        onClick={() => {
+                          setThemeBackgroundColor(theme.backgroundColor);
+                          setThemeLayoutColor(theme.layoutColor);
+                          setThemeTextColor(theme.textColor);
+                          setThemeInputColor(theme.inputColor);
+                          setThemeAccentColor(theme.accentColor);
+                          toast.success(`${theme.name} mavzusi tanlandi!`);
+                        }}
+                      >
+                        <div
+                          className="tg-theme-preview-box"
+                          style={{ background: theme.previewBg }}
+                        >
+                          <div
+                            className="tg-mini-bubble tg-mini-incoming"
+                            style={{ background: theme.previewIncoming }}
+                          />
+                          <div
+                            className="tg-mini-bubble tg-mini-outgoing"
+                            style={{ background: theme.previewOutgoing }}
+                          />
+                          <div className="tg-mini-radio" />
+                        </div>
+                        <span className="tg-theme-card-name">
+                          {theme.name}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Accent Color Swatches Row */}
+                <div style={{ width: "100%", marginTop: 4 }}>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: "var(--muted)",
+                      marginBottom: 8,
+                    }}
+                  >
+                    Aksent ranglari (Accent colors):
+                  </div>
+                  <div className="tg-accent-swatches-row">
+                    {TELEGRAM_ACCENTS.map((color) => (
                       <button
                         key={`accent-${color}`}
                         type="button"
-                        className={`settings-color-swatch${themeAccentColor === color ? " active" : ""}`}
+                        className={`tg-accent-swatch${themeAccentColor.toLowerCase() === color.toLowerCase() ? " active" : ""}`}
                         style={{ background: color }}
                         onClick={() => setThemeAccentColor(color)}
-                        aria-label={`Accent ${color}`}
+                        title={color}
                       />
                     ))}
-                  </div>
-                  <label className="settings-color-picker-wrap">
-                    <span>Custom accent</span>
-                    <input
-                      type="color"
-                      value={themeAccentColor}
-                      onChange={(e) =>
-                        setThemeAccentColor(
-                          normalizeHexColor(e.target.value, "#0e7c66"),
-                        )
-                      }
-                    />
-                  </label>
-                </div>
-
-                <div className="settings-color-group">
-                  <span className="settings-color-label">
-                    Layout color (panels)
-                  </span>
-                  <div className="settings-color-swatches">
-                    {LAYOUT_COLOR_PRESETS.map((color) => (
-                      <button
-                        key={`layout-${color}`}
-                        type="button"
-                        className={`settings-color-swatch${themeLayoutColor === color ? " active" : ""}`}
-                        style={{ background: color }}
-                        onClick={() => setThemeLayoutColor(color)}
-                        aria-label={`Layout ${color}`}
+                    <label
+                      className="tg-accent-swatch"
+                      style={{
+                        background: themeAccentColor,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        cursor: "pointer",
+                      }}
+                      title="Boshqa rang tanlash"
+                    >
+                      <span
+                        style={{
+                          fontSize: 13,
+                          filter: "drop-shadow(0 1px 1px rgba(0,0,0,0.8))",
+                        }}
+                      >
+                        🎨
+                      </span>
+                      <input
+                        type="color"
+                        value={themeAccentColor}
+                        onChange={(e) =>
+                          setThemeAccentColor(
+                            normalizeHexColor(e.target.value, "#0088cc"),
+                          )
+                        }
+                        style={{
+                          opacity: 0,
+                          position: "absolute",
+                          inset: 0,
+                          pointerEvents: "none",
+                        }}
                       />
-                    ))}
+                    </label>
                   </div>
-                  <label className="settings-color-picker-wrap">
-                    <span>Custom layout</span>
-                    <input
-                      type="color"
-                      value={themeLayoutColor}
-                      onChange={(e) =>
-                        setThemeLayoutColor(
-                          normalizeHexColor(e.target.value, "#1e2c3a"),
-                        )
-                      }
-                    />
-                  </label>
                 </div>
 
-                <div className="settings-color-inline-pickers">
-                  <label className="settings-color-picker-wrap">
-                    <span>Text color</span>
-                    <div className="settings-color-swatches compact">
-                      {TEXT_COLOR_PRESETS.map((color) => (
-                        <button
-                          key={`text-${color}`}
-                          type="button"
-                          className={`settings-color-swatch${themeTextColor === color ? " active" : ""}`}
-                          style={{ background: color }}
-                          onClick={() => setThemeTextColor(color)}
-                          aria-label={`Text ${color}`}
+                {/* Live Chat Example Box (Interactive Real-time Preview) */}
+                <div
+                  className="tg-live-chat-preview"
+                  style={{
+                    backgroundColor: themeBackgroundColor,
+                    backgroundImage: chatBackgroundImage
+                      ? `url(${chatBackgroundImage})`
+                      : "none",
+                    backgroundSize: "cover",
+                    backgroundPosition: "center",
+                  }}
+                >
+                  <div
+                    className="tg-preview-bubble tg-preview-incoming"
+                    style={{
+                      background: themeLayoutColor,
+                      color: themeTextColor,
+                    }}
+                  >
+                    <span>Salom! Telegram dizayniga o'tdikmi?</span>
+                    <span
+                      className="tg-preview-time"
+                      style={{ color: themeTextColor }}
+                    >
+                      17:15
+                    </span>
+                  </div>
+
+                  <div
+                    className="tg-preview-bubble tg-preview-outgoing"
+                    style={{
+                      background: themeAccentColor,
+                      color: "#ffffff",
+                    }}
+                  >
+                    <span>
+                      Ha! Ranglar va fonlar real vaqtda jonli o'zgaryapti 🚀
+                    </span>
+                    <span
+                      className="tg-preview-time"
+                      style={{ color: "rgba(255,255,255,0.85)" }}
+                    >
+                      17:16 ✓✓
+                    </span>
+                  </div>
+                </div>
+
+                {/* Collapsible custom color adjustments */}
+                <details style={{ width: "100%", marginTop: 4 }}>
+                  <summary
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: "var(--muted)",
+                      cursor: "pointer",
+                      userSelect: "none",
+                    }}
+                  >
+                    ⚙️ Boshqa ranglarni sozlash (Kengaytirilgan)...
+                  </summary>
+                  <div
+                    style={{
+                      marginTop: 10,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 10,
+                    }}
+                  >
+                    <div className="settings-color-inline-pickers">
+                      <label className="settings-color-picker-wrap">
+                        <span>Panellar (Layout)</span>
+                        <input
+                          type="color"
+                          value={themeLayoutColor}
+                          onChange={(e) =>
+                            setThemeLayoutColor(
+                              normalizeHexColor(e.target.value, "#1e2c3a"),
+                            )
+                          }
                         />
-                      ))}
+                      </label>
+                      <label className="settings-color-picker-wrap">
+                        <span>Asosiy fon</span>
+                        <input
+                          type="color"
+                          value={themeBackgroundColor}
+                          onChange={(e) =>
+                            setThemeBackgroundColor(
+                              normalizeHexColor(e.target.value, "#17212b"),
+                            )
+                          }
+                        />
+                      </label>
+                      <label className="settings-color-picker-wrap">
+                        <span>Matn rangi</span>
+                        <input
+                          type="color"
+                          value={themeTextColor}
+                          onChange={(e) =>
+                            setThemeTextColor(
+                              normalizeHexColor(e.target.value, "#e1e8ef"),
+                            )
+                          }
+                        />
+                      </label>
+                      <label className="settings-color-picker-wrap">
+                        <span>Qidiruv/xabar maydoni</span>
+                        <input
+                          type="color"
+                          value={themeInputColor}
+                          onChange={(e) =>
+                            setThemeInputColor(
+                              normalizeHexColor(e.target.value, "#17212b"),
+                            )
+                          }
+                        />
+                      </label>
                     </div>
-                    <input
-                      type="color"
-                      value={themeTextColor}
-                      onChange={(e) =>
-                        setThemeTextColor(
-                          normalizeHexColor(e.target.value, "#e1e8ef"),
-                        )
-                      }
-                    />
-                  </label>
-
-                  <label className="settings-color-picker-wrap">
-                    <span>Main background</span>
-                    <input
-                      type="color"
-                      value={themeBackgroundColor}
-                      onChange={(e) =>
-                        setThemeBackgroundColor(
-                          normalizeHexColor(e.target.value, "#17212b"),
-                        )
-                      }
-                    />
-                  </label>
-
-                  <label className="settings-color-picker-wrap">
-                    <span>Search/message input</span>
-                    <input
-                      type="color"
-                      value={themeInputColor}
-                      onChange={(e) =>
-                        setThemeInputColor(
-                          normalizeHexColor(e.target.value, "#17212b"),
-                        )
-                      }
-                    />
-                  </label>
-                </div>
+                  </div>
+                </details>
 
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <button
@@ -1406,7 +1718,7 @@ export function SettingsModal(props: SettingsModalProps) {
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: 10,
+                    justifyContent: "space-between",
                     marginTop: 6,
                   }}
                 >
@@ -1423,12 +1735,139 @@ export function SettingsModal(props: SettingsModalProps) {
                   </span>
                   <button
                     className="settings-btn primary"
-                    onClick={fetchPublicIp}
-                    disabled={ipLoading}
+                    onClick={() => {
+                      void fetchPublicIp();
+                      void fetchZeroTier();
+                    }}
+                    disabled={ipLoading || ztLoading}
                     style={{ minWidth: 36, padding: "4px 10px" }}
+                    title="Qayta tekshirish"
                   >
-                    {ipLoading ? "..." : "🔄"}
+                    {ipLoading || ztLoading ? "..." : "🔄"}
                   </button>
+                </div>
+
+                {/* ZeroTier in Network settings */}
+                <div
+                  style={{
+                    marginTop: 12,
+                    padding: "10px 12px",
+                    background: "var(--bg-card, rgba(255,255,255,0.03))",
+                    borderRadius: 10,
+                    border: "1px solid var(--border, rgba(255,255,255,0.06))",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginBottom: 8,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 600,
+                        color: "var(--text)",
+                      }}
+                    >
+                      🌐 ZeroTier IP(lar):
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        color:
+                          zerotierNetworks.length > 0
+                            ? "var(--success, #22c55e)"
+                            : "var(--muted)",
+                      }}
+                    >
+                      {zerotierNetworks.length > 0
+                        ? `${zerotierNetworks.length} ta tarmoq ulangan`
+                        : "Ulanmagan"}
+                    </span>
+                  </div>
+                  {zerotierNetworks.length > 0 ? (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 6,
+                      }}
+                    >
+                      {zerotierNetworks.map((net) => (
+                        <div
+                          key={net.id || net.ip}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            background: "rgba(0,0,0,0.18)",
+                            padding: "6px 10px",
+                            borderRadius: 8,
+                            gap: 8,
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              minWidth: 0,
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: 12,
+                                fontWeight: 600,
+                                color: "#38bdf8",
+                              }}
+                            >
+                              {net.name || "ZeroTier"}{" "}
+                              <small
+                                style={{ opacity: 0.6, fontWeight: 400 }}
+                              >
+                                ({net.id})
+                              </small>
+                            </span>
+                            <code
+                              style={{
+                                fontSize: 13,
+                                color: "var(--text)",
+                                fontFamily: "monospace",
+                              }}
+                            >
+                              {net.ip || "IP kutilmoqda..."}
+                            </code>
+                          </div>
+                          {net.ip && (
+                            <button
+                              type="button"
+                              className="settings-btn"
+                              style={{ padding: "3px 8px", fontSize: 12 }}
+                              onClick={() => {
+                                navigator.clipboard.writeText(net.ip);
+                                toast.success(`${net.ip} nusxalandi!`);
+                              }}
+                              title="IP nusxalash"
+                            >
+                              📋 Nusxa
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <span
+                      style={{
+                        fontSize: 12,
+                        color: "var(--muted)",
+                        fontStyle: "italic",
+                      }}
+                    >
+                      Hozirda faol ZeroTier tarmog'i topilmadi.
+                    </span>
+                  )}
                 </div>
               </div>
 

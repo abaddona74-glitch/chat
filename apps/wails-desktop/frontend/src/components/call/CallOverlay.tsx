@@ -1,4 +1,10 @@
-import React, { MutableRefObject, RefObject } from "react";
+import React, {
+  MutableRefObject,
+  RefObject,
+  useState,
+  useEffect,
+  useRef,
+} from "react";
 import { CallStatus, Group, PublicUser } from "../../types";
 import {
   formatCallDuration,
@@ -118,9 +124,100 @@ export function CallOverlay({
   localScreenFullscreen,
   setLocalScreenFullscreen,
 }: CallOverlayProps) {
+  // ── CALL WIDGET DRAG & POSITION (Remembers last position) ──
+  const [widgetPos, setWidgetPos] = useState<{ x: number; y: number } | null>(() => {
+    try {
+      const saved = localStorage.getItem("call_widget_position");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed.x === "number" && typeof parsed.y === "number") {
+          const maxX = Math.max(10, window.innerWidth - 360);
+          const maxY = Math.max(10, window.innerHeight - 200);
+          return {
+            x: Math.max(10, Math.min(maxX, parsed.x)),
+            y: Math.max(10, Math.min(maxY, parsed.y)),
+          };
+        }
+      }
+    } catch {}
+    return null;
+  });
+
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const isDraggingRef = useRef(false);
+  const dragStartRef = useRef({ x: 0, y: 0, widgetX: 0, widgetY: 0 });
+
+  const handleHeaderMouseDown = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest("button")) return;
+
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+    const rect = overlay.getBoundingClientRect();
+
+    isDraggingRef.current = true;
+    dragStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      widgetX: rect.left,
+      widgetY: rect.top,
+    };
+
+    const handleMouseMove = (ev: MouseEvent) => {
+      if (!isDraggingRef.current) return;
+      const dx = ev.clientX - dragStartRef.current.x;
+      const dy = ev.clientY - dragStartRef.current.y;
+      const overlayEl = overlayRef.current;
+      const currentWidth = overlayEl?.offsetWidth || 340;
+      const currentHeight = overlayEl?.offsetHeight || 250;
+
+      const maxX = Math.max(10, window.innerWidth - currentWidth - 10);
+      const maxY = Math.max(10, window.innerHeight - currentHeight - 10);
+
+      const nextX = Math.max(10, Math.min(maxX, dragStartRef.current.widgetX + dx));
+      const nextY = Math.max(10, Math.min(maxY, dragStartRef.current.widgetY + dy));
+
+      setWidgetPos({ x: nextX, y: nextY });
+    };
+
+    const handleMouseUp = () => {
+      isDraggingRef.current = false;
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+  };
+
+  useEffect(() => {
+    if (widgetPos) {
+      try {
+        localStorage.setItem("call_widget_position", JSON.stringify(widgetPos));
+      } catch {}
+    }
+  }, [widgetPos]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setWidgetPos((prev) => {
+        if (!prev) return null;
+        const maxX = Math.max(10, window.innerWidth - 360);
+        const maxY = Math.max(10, window.innerHeight - 200);
+        return {
+          x: Math.max(10, Math.min(maxX, prev.x)),
+          y: Math.max(10, Math.min(maxY, prev.y)),
+        };
+      });
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
   if (callStatus !== "in-call") {
     return null;
   }
+
+  const hasVideo = isScreenSharing || isRemoteScreenSharing;
 
   const isCallFailed =
     callStats.iceState === "failed" || callStats.connState === "failed";
@@ -274,13 +371,16 @@ export function CallOverlay({
         </div>
       )}
 
-      {/* Full call overlay - always mounted for video refs */}
+      {/* Full call overlay - moveable & remembers position */}
       <div
+        ref={overlayRef}
         className="in-call-overlay"
         style={{
           position: "fixed",
-          bottom: 20,
-          right: 20,
+          left: widgetPos ? `${widgetPos.x}px` : undefined,
+          top: widgetPos ? `${widgetPos.y}px` : undefined,
+          bottom: widgetPos ? undefined : 20,
+          right: widgetPos ? undefined : 20,
           width: 340,
           background: "var(--bg-card)",
           borderRadius: 12,
@@ -294,13 +394,21 @@ export function CallOverlay({
         }}
       >
         <div
+          onMouseDown={handleHeaderMouseDown}
           style={{
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
+            cursor: "grab",
+            padding: "2px 0",
+            userSelect: "none",
           }}
+          title="Ushlab surish mumkin (Drag to move)"
         >
-          <strong style={{ color: "var(--text)" }}>Call in progress</strong>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ opacity: 0.45, cursor: "grab", fontSize: 13, userSelect: "none" }}>⠿</span>
+            <strong style={{ color: "var(--text)" }}>Call in progress</strong>
+          </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ color: "var(--primary)", fontSize: 13 }}>
               {formatCallDuration(callStats.durationSec)}
@@ -823,6 +931,7 @@ export function CallOverlay({
           </div>
         )}
 
+        {/* ── VIDEO / SCREEN SHARE BOX (only visible when screen sharing is active) ── */}
         <div
           style={{
             position: "relative",
@@ -830,22 +939,13 @@ export function CallOverlay({
             borderRadius: 8,
             overflow: "hidden",
             background: "#000",
-            minHeight: 180,
-            cursor:
-              (remoteVideoRef.current?.srcObject as MediaStream | null)
-                ?.getVideoTracks()
-                .some((track) => track.readyState === "live") ||
-              isRemoteScreenSharing
-                ? "pointer"
-                : "default",
+            minHeight: hasVideo ? 180 : 0,
+            height: hasVideo ? "auto" : 0,
+            display: hasVideo ? "block" : "none",
+            cursor: hasVideo ? "pointer" : "default",
           }}
           onClick={() => {
-            const remoteStream = remoteVideoRef.current
-              ?.srcObject as MediaStream | null;
-            const hasRemoteVideo = !!remoteStream
-              ?.getVideoTracks()
-              .some((track) => track.readyState === "live");
-            if (isRemoteScreenSharing || hasRemoteVideo) {
+            if (hasVideo) {
               setScreenFullscreen(true);
             }
           }}

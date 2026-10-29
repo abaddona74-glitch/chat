@@ -12,6 +12,7 @@ import { createGroupsRouter } from "./routes/groups.js";
 import { authRouter } from "./routes/auth.js";
 import { uploadRouter } from "./routes/upload.js";
 import { usersRouter } from "./routes/users.js";
+import { ttsRouter } from "./routes/tts.js";
 import { registerSocketHandlers } from "./socket.js";
 import { getRecentEvents, getRecentLogs, getStats, subscribeLogs, subscribeMonitor } from "./lib/monitor.js";
 import { sendPushUpdateAvailableToAndroid } from "./lib/push.js";
@@ -523,13 +524,17 @@ app.use("/users", usersRouter);
 app.use("/messages", createMessagesRouter(io));
 app.use("/groups", createGroupsRouter(io));
 app.use("/upload", uploadRouter);
+app.use("/tts", ttsRouter);
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error(error);
   return res.status(500).json({ message: "Server xatosi." });
 });
 
+import { startMessageScheduler } from "./lib/scheduler.js";
+
 registerSocketHandlers(io);
+startMessageScheduler(io);
 
 server.listen(env.PORT, () => {
   console.log(`Server running on http://localhost:${env.PORT}`);

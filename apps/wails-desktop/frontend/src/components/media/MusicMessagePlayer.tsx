@@ -29,6 +29,7 @@ export type MusicCommand =
   | { type: "seek"; ratio: number }
   | { type: "seekRelative"; delta: number }
   | { type: "setVolume"; volume: number }
+  | { type: "setSpeed"; speed: number }
   | { type: "setRepeat"; repeat: boolean }
   | { type: "stop" };
 
@@ -312,6 +313,10 @@ export function GlobalMusicController() {
         }
         case "setRepeat": {
           a.loop = cmd.repeat;
+          break;
+        }
+        case "setSpeed": {
+          a.playbackRate = cmd.speed;
           break;
         }
         case "stop": {

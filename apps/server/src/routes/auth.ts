@@ -84,8 +84,15 @@ function toPublicUser(user: {
   isEmailVerified: boolean;
   statusText?: string | null;
   statusEmoji?: string | null;
+  zerotierInfo?: string | null;
   lastSeenAt: Date | null;
 }) {
+  let zerotierNetworks: any[] = [];
+  if (user.zerotierInfo) {
+    try {
+      zerotierNetworks = JSON.parse(user.zerotierInfo);
+    } catch {}
+  }
   return {
     id: user.id,
     email: user.email,
@@ -96,6 +103,7 @@ function toPublicUser(user: {
     isEmailVerified: user.isEmailVerified,
     statusText: user.statusText ?? null,
     statusEmoji: user.statusEmoji ?? null,
+    zerotierNetworks,
     lastSeenAt: user.lastSeenAt
   };
 }
@@ -113,20 +121,321 @@ function buildDeepLinkUrl(baseUrl: string, state: string, status: "success" | "e
   return `${baseUrl}${separator}state=${encodeURIComponent(state)}&status=${status}`;
 }
 
-function renderGoogleMobileCallbackPage(returnToUrl: string) {
-  const safeReturnToUrl = JSON.stringify(returnToUrl);
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Muvaffaqiyatli!</title>
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<style>body{font-family:system-ui;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#111827;color:#f9fafb;padding:24px;}
-.card{text-align:center;padding:32px;border-radius:20px;background:#1f2937;box-shadow:0 20px 40px rgba(0,0,0,0.35);max-width:360px;width:100%;}
-h1{color:#4ade80;margin:0 0 10px;}p{color:#cbd5e1;line-height:1.5;margin:0 0 16px;}button{border:0;border-radius:12px;padding:14px 18px;font-weight:600;background:#2563eb;color:#fff;cursor:pointer;width:100%;}</style></head>
-<body><div class="card"><h1>\u2705 Muvaffaqiyatli!</h1><p>Ilovaga qaytish uchun sahifa avtomatik yo'naltiriladi.</p><button id="return-to-app" type="button">App ga qaytish</button></div>
-<script>
-const returnToUrl = ${safeReturnToUrl};
-const goBackToApp = () => { window.location.replace(returnToUrl); };
-document.getElementById("return-to-app")?.addEventListener("click", goBackToApp);
-setTimeout(goBackToApp, 150);
-</script></body></html>`;
+function escapeHtml(s: string) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function renderAuthSuccessPage(options: {
+  displayName?: string;
+  returnToUrl?: string;
+}) {
+  const safeReturnToUrl = options.returnToUrl ? JSON.stringify(options.returnToUrl) : "null";
+  const safeName = options.displayName ? escapeHtml(options.displayName) : "";
+
+  return `<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Muvaffaqiyatli kirish | Chat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0b0e17;
+      color: #f1f5f9;
+      padding: 24px;
+      position: relative;
+      overflow: hidden;
+    }
+    .glow-1 {
+      position: absolute;
+      top: 20%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 520px;
+      height: 520px;
+      background: radial-gradient(circle, rgba(59, 130, 246, 0.16) 0%, rgba(16, 185, 129, 0.08) 50%, transparent 70%);
+      filter: blur(50px);
+      pointer-events: none;
+      z-index: 0;
+    }
+    .glow-2 {
+      position: absolute;
+      bottom: 10%;
+      right: 15%;
+      width: 360px;
+      height: 360px;
+      background: radial-gradient(circle, rgba(99, 102, 241, 0.14) 0%, transparent 70%);
+      filter: blur(60px);
+      pointer-events: none;
+      z-index: 0;
+    }
+    .card {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 440px;
+      background: rgba(18, 24, 38, 0.82);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border-radius: 24px;
+      padding: 40px 32px 32px;
+      text-align: center;
+      box-shadow: 0 30px 60px -12px rgba(0, 0, 0, 0.75), 0 0 40px rgba(16, 185, 129, 0.08);
+      animation: cardAppear 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    @keyframes cardAppear {
+      0% { opacity: 0; transform: translateY(18px) scale(0.97); }
+      100% { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .app-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #94a3b8;
+      margin-bottom: 24px;
+    }
+    .app-badge-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 10px #10b981;
+    }
+    .icon-wrapper {
+      position: relative;
+      width: 80px;
+      height: 80px;
+      margin: 0 auto 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .icon-bg {
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.18), rgba(5, 150, 105, 0.35));
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      box-shadow: 0 0 32px rgba(16, 185, 129, 0.32);
+      animation: pulse 2.4s infinite ease-in-out;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.05); opacity: 0.88; }
+    }
+    .check-svg {
+      position: relative;
+      z-index: 2;
+      width: 44px;
+      height: 44px;
+      color: #34d399;
+    }
+    .check-circle {
+      stroke-dasharray: 166;
+      stroke-dashoffset: 166;
+      stroke-width: 2.5;
+      stroke-miterlimit: 10;
+      stroke: #34d399;
+      animation: stroke 0.6s cubic-bezier(0.65, 0, 0.45, 1) forwards;
+    }
+    .check-path {
+      transform-origin: 50% 50%;
+      stroke-dasharray: 48;
+      stroke-dashoffset: 48;
+      animation: stroke 0.3s cubic-bezier(0.65, 0, 0.45, 1) 0.45s forwards;
+    }
+    @keyframes stroke {
+      100% { stroke-dashoffset: 0; }
+    }
+    h1 {
+      font-size: 24px;
+      font-weight: 700;
+      color: #ffffff;
+      margin-bottom: 8px;
+      letter-spacing: -0.02em;
+    }
+    .user-welcome {
+      font-size: 15px;
+      color: #94a3b8;
+      margin-bottom: 12px;
+      line-height: 1.5;
+    }
+    .user-name {
+      color: #60a5fa;
+      font-weight: 600;
+    }
+    .description {
+      font-size: 14px;
+      color: #64748b;
+      line-height: 1.5;
+      margin-bottom: 28px;
+    }
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      padding: 14px 24px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      color: #ffffff;
+      font-size: 15px;
+      font-weight: 600;
+      text-decoration: none;
+      border: none;
+      cursor: pointer;
+      box-shadow: 0 10px 25px -5px rgba(37, 99, 235, 0.4);
+      transition: all 0.2s ease;
+    }
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      transform: translateY(-2px);
+      box-shadow: 0 14px 30px -5px rgba(37, 99, 235, 0.5);
+    }
+    .btn-primary:active {
+      transform: translateY(0);
+    }
+    .footer-note {
+      margin-top: 20px;
+      font-size: 13px;
+      color: #64748b;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .timer-badge {
+      display: inline-block;
+      font-variant-numeric: tabular-nums;
+      color: #94a3b8;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="glow-1"></div>
+  <div class="glow-2"></div>
+
+  <div class="card">
+    <div class="app-badge">
+      <div class="app-badge-dot"></div>
+      <span>Chat Desktop Application</span>
+    </div>
+
+    <div class="icon-wrapper">
+      <div class="icon-bg"></div>
+      <svg class="check-svg" viewBox="0 0 52 52" fill="none">
+        <circle class="check-circle" cx="26" cy="26" r="24" stroke="currentColor" stroke-width="3" />
+        <path class="check-path" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" d="M14 27l8 8 16-16" />
+      </svg>
+    </div>
+
+    <h1>Muvaffaqiyatli!</h1>
+    ${
+      safeName
+        ? `<p class="user-welcome">Xush kelibsiz, <span class="user-name">${safeName}</span>!</p>`
+        : `<p class="user-welcome">Hisobingiz muvaffaqiyatli tasdiqlandi.</p>`
+    }
+    <p class="description">
+      Desktop ilovangizga qaytib suhbatni bemalol davom ettirishingiz mumkin.
+    </p>
+
+    <button id="return-btn" class="btn-primary" type="button">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="9 10 4 15 9 20"></polyline>
+        <path d="M20 4v7a4 4 0 0 1-4 4H4"></path>
+      </svg>
+      <span id="btn-text">Ilovaga qaytish</span>
+    </button>
+
+    <div id="desktop-notice" style="display: none; margin-top: 14px; font-size: 13px; color: #34d399; background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.28); border-radius: 12px; padding: 12px 14px; line-height: 1.45; text-align: left;">
+      🎉 <strong>Kirish muvaffaqiyatli yakunlandi!</strong><br />
+      Desktop ilovangizda profilingiz ochildi. Pastdagi Taskbar (topshiriqlar paneli) orqali <strong>Chat Desktop</strong> oynasiga o'tishingiz va bu brauzer oynasini yopishingiz mumkin.
+    </div>
+
+    <div class="footer-note" style="margin-top: 18px;">
+      <span>Ushbu oynani yopishingiz mumkin</span>
+      <span class="timer-badge" id="countdown-badge">(4s)</span>
+    </div>
+  </div>
+
+  <script>
+    const returnToUrl = ${safeReturnToUrl};
+    const returnBtn = document.getElementById("return-btn");
+    const btnText = document.getElementById("btn-text");
+    const badge = document.getElementById("countdown-badge");
+    const notice = document.getElementById("desktop-notice");
+
+    let seconds = 4;
+    const updateCountdown = () => {
+      if (badge) badge.textContent = "(" + seconds + "s)";
+      if (seconds <= 0) {
+        tryClose();
+        return;
+      }
+      seconds--;
+      setTimeout(updateCountdown, 1000);
+    };
+
+    function tryClose() {
+      if (returnToUrl) {
+        window.location.replace(returnToUrl);
+      } else {
+        // 1. Try invoking registered Windows protocol to focus Chat Desktop
+        try {
+          window.location.href = "chatdesktop://auth?status=success";
+        } catch (e) {}
+
+        // 2. Try closing the browser tab
+        setTimeout(() => {
+          try {
+            window.open('', '_self', '');
+            window.close();
+          } catch (e) {}
+        }, 200);
+
+        // 3. Show clear feedback on screen
+        if (notice) notice.style.display = "block";
+        if (btnText) btnText.textContent = "✓ Desktop ilovasiga o'ting";
+        if (returnBtn) {
+          returnBtn.style.background = "linear-gradient(135deg, #059669, #10b981)";
+        }
+      }
+    }
+
+    if (returnBtn) {
+      returnBtn.addEventListener("click", () => {
+        tryClose();
+      });
+    }
+
+    if (returnToUrl) {
+      setTimeout(() => {
+        window.location.replace(returnToUrl);
+      }, 200);
+    } else {
+      setTimeout(updateCountdown, 1000);
+    }
+  </script>
+</body>
+</html>`;
 }
 
 router.post("/register", authLimiter, async (req, res) => {
@@ -488,14 +797,15 @@ router.get("/google/callback", async (req, res) => {
     });
 
     if (googleAuthRequest.returnTo) {
-      return res.send(renderGoogleMobileCallbackPage(buildDeepLinkUrl(googleAuthRequest.returnTo, state, "success")));
+      return res.send(renderAuthSuccessPage({
+        displayName: user.displayName || undefined,
+        returnToUrl: buildDeepLinkUrl(googleAuthRequest.returnTo, state, "success"),
+      }));
     }
 
-    return res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Muvaffaqiyatli!</title>
-<style>body{font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#1a1a2e;color:#e0e0e0;}
-.card{text-align:center;padding:40px;border-radius:16px;background:#16213e;box-shadow:0 4px 20px rgba(0,0,0,0.3);}
-h1{color:#4ade80;margin-bottom:8px;}p{color:#94a3b8;}</style></head>
-<body><div class="card"><h1>\u2705 Muvaffaqiyatli!</h1><p>Desktop ilovaga qayting. Bu oynani yopishingiz mumkin.</p></div></body></html>`);
+    return res.send(renderAuthSuccessPage({
+      displayName: user.displayName || undefined,
+    }));
   } catch (err) {
     console.error("Google callback error:", err);
     return res.status(500).send("<h2>\u274c Serverda xatolik yuz berdi.</h2>");

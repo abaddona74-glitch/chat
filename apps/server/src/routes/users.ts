@@ -26,31 +26,109 @@ const createThemeProfileSchema = z.object({
 
 router.get("/", authRequired, async (req, res) => {
   const me = req.user!;
-  const users = await prisma.user.findMany({
-    where: {
-      id: { not: me.id },
-      isEmailVerified: true
-    },
-    select: {
-      id: true,
-      email: true,
-      displayName: true,
-      username: true,
-      avatarUrl: true,
-      statusText: true,
-      statusEmoji: true,
-      lastSeenAt: true
-    },
-    orderBy: {
-      createdAt: "desc"
+  const [users, sentMessages, receivedMessages] = await Promise.all([
+    prisma.user.findMany({
+      where: {
+        id: { not: me.id },
+        isEmailVerified: true
+      },
+      select: {
+        id: true,
+        email: true,
+        displayName: true,
+        username: true,
+        avatarUrl: true,
+        statusText: true,
+        statusEmoji: true,
+        zerotierInfo: true,
+        lastSeenAt: true
+      },
+      orderBy: {
+        createdAt: "desc"
+      }
+    }),
+    prisma.message.groupBy({
+      by: ["recipientId"],
+      where: {
+        senderId: me.id,
+        deletedForSender: false
+      },
+      _max: {
+        createdAt: true
+      }
+    }),
+    prisma.message.groupBy({
+      by: ["senderId"],
+      where: {
+        recipientId: me.id,
+        deletedForRecipient: false
+      },
+      _max: {
+        createdAt: true
+      }
+    })
+  ]);
+
+  const lastMessageMap = new Map<string, Date>();
+  for (const item of sentMessages) {
+    if (item._max.createdAt) {
+      lastMessageMap.set(item.recipientId, item._max.createdAt);
+    }
+  }
+  for (const item of receivedMessages) {
+    if (item._max.createdAt) {
+      const prev = lastMessageMap.get(item.senderId);
+      if (!prev || item._max.createdAt > prev) {
+        lastMessageMap.set(item.senderId, item._max.createdAt);
+      }
+    }
+  }
+
+  return res.json({
+    users: users.map((user) => {
+      let zerotierNetworks: any[] = [];
+      if (user.zerotierInfo) {
+        try {
+          zerotierNetworks = JSON.parse(user.zerotierInfo);
+        } catch {}
+      }
+      return {
+        ...user,
+        isOnline: isUserOnline(user.id),
+        lastMessageAt: lastMessageMap.get(user.id)?.toISOString() ?? null,
+        zerotierNetworks
+      };
+    })
+  });
+});
+
+// ── UPDATE ZEROTIER NETWORKS ──
+router.put("/zerotier", authRequired, async (req, res) => {
+  const { networks } = req.body;
+  const me = req.user!;
+
+  const infoStr =
+    Array.isArray(networks) && networks.length > 0
+      ? JSON.stringify(networks)
+      : null;
+
+  const updated = await prisma.user.update({
+    where: { id: me.id },
+    data: {
+      zerotierInfo: infoStr
     }
   });
 
+  let parsed: any[] = [];
+  if (updated.zerotierInfo) {
+    try {
+      parsed = JSON.parse(updated.zerotierInfo);
+    } catch {}
+  }
+
   return res.json({
-    users: users.map((user) => ({
-      ...user,
-      isOnline: isUserOnline(user.id)
-    }))
+    ok: true,
+    zerotierNetworks: parsed
   });
 });
 

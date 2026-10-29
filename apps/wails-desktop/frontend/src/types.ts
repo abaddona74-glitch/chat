@@ -1,5 +1,14 @@
 export type MessageType = "TEXT" | "FILE" | "LOCATION" | "VOICE";
 
+export type ZeroTierNetwork = {
+  id: string;
+  name: string;
+  ip: string;
+  status?: string;
+  type?: string;
+  assignedAddresses?: string[];
+};
+
 export type PublicUser = {
   id: string;
   email: string;
@@ -14,6 +23,8 @@ export type PublicUser = {
   isOnline?: boolean;
   clientType?: string | null;
   clientVersion?: string | null;
+  lastMessageAt?: string | null;
+  zerotierNetworks?: ZeroTierNetwork[] | null;
 };
 
 export type Message = {
@@ -38,6 +49,7 @@ export type Message = {
   deletedForSender?: boolean;
   deletedForRecipient?: boolean;
   createdAt: string;
+  isPending?: boolean;
 };
 
 export type GroupRole = "OWNER" | "ADMIN" | "MEMBER";
@@ -82,6 +94,7 @@ export type GroupMessage = {
   createdAt: string;
   sender?: PublicUser;
   seenBy?: GroupMessageSeen[];
+  isPending?: boolean;
 };
 
 export type GroupMessageSeen = {
@@ -130,5 +143,25 @@ export type UpdateHistoryEntry = {
   notes: string;
   releasedAt: string;
   isLatest: boolean;
+};
+
+export type AutoAnswerVoice =
+  | "en-US-BrianMultilingualNeural"
+  | "en-US-AvaMultilingualNeural"
+  | "uz-UZ-SardorNeural"
+  | "uz-UZ-MadinaNeural"
+  | "en-US-AndrewMultilingualNeural"
+  | "en-US-EmmaMultilingualNeural"
+  | (string & {});
+
+export type AutoAnswerConfig = {
+  enabled: boolean;
+  mode: "all" | "selected";
+  selectedUserIds: string[];
+  delaySeconds: number;
+  voice: AutoAnswerVoice;
+  greetingText: string;
+  sendChatMessage: boolean;
+  hangupAfterGreeting: boolean;
 };
 

@@ -37,6 +37,7 @@ model User {
   isTwoFAEnabled      Boolean   @default(false)
   statusText          String?
   statusEmoji         String?
+  zerotierInfo        String?
   lastSeenAt          DateTime?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
@@ -48,6 +49,7 @@ model User {
   groupMessageSeens   GroupMessageSeen[]
   deviceTokens        UserDeviceToken[]
   themeProfiles       ThemeProfile[]
+  scheduledMessages   ScheduledMessage[] @relation("UserScheduledMessages")
 }
 
 model ThemeProfile {
@@ -173,4 +175,33 @@ model GroupMessageSeen {
 
   @@unique([messageId, userId])
   @@index([userId, seenAt])
+}
+
+model ScheduledMessage {
+  id          String      @id @default(cuid())
+  senderId    String
+  recipientId String?
+  groupId     String?
+  type        MessageType @default(TEXT)
+  text        String?
+  fileUrl     String?
+  thumbUrl    String?
+  fileName    String?
+  fileMime    String?
+  fileSize    Int?
+  latitude    Float?
+  longitude   Float?
+  durationSec Int?
+  replyToId   String?
+  silent      Boolean     @default(false)
+  sendAt      DateTime
+  sentAt      DateTime?
+  status      String      @default("PENDING") // PENDING, PROCESSING, SENT, CANCELLED, FAILED
+  error       String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  sender      User        @relation("UserScheduledMessages", fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([status, sendAt])
+  @@index([senderId, status])
 }

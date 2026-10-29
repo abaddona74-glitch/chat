@@ -207,3 +207,53 @@ bash apps/server/package-for-deploy.sh
 - Bu MVP (Minimum Viable Product)
 - Telegram darajasidagi to'liq video-call, push delivery, media compression, E2E encryption hali qo'shilmagan
 - `.env.production` fayli gitignore qilingan — prod secrets repository'ga tushmaydi
+
+---
+
+## Yangi Kompyuterga Ko'chirish va Ishga Tushirish (Migration Guide)
+
+Loyiha ustida boshqa kompyuterda eson-omon ishlashni davom ettirish uchun quyidagi ketma-ketlikni bajaring:
+
+### 1. Yangi kompyuterda kerakli dasturlar:
+- **Node.js** (v20 yoki undan yuqori)
+- **Git**
+- **Go** (v1.21+) va **Wails CLI**:
+  ```bash
+  go install github.com/wailsapp/wails/v2/cmd/wails@latest
+  ```
+- **PostgreSQL** (lokal o'rnatilgan yoki Docker orqali: `docker compose up -d`)
+
+### 2. Kodni yuklab olish:
+```bash
+git clone https://github.com/abaddona74-glitch/chat.git
+cd chat
+```
+
+### 3. `.env` fayllarni joylashtirish:
+Eski kompyuterdan saqlab olingan `env-backup.zip` faylini yangi kompyuterda `chat` papkasi ichiga tashlang va terminalda quyidagi buyruqni bering:
+```powershell
+Expand-Archive -Path env-backup.zip -DestinationPath . -Force
+```
+*Bu buyruq server, wails va web `.env` fayllarini o'zining asl joylariga (`apps/server/.env`, `apps/wails-desktop/frontend/.env`, `apps/web/.env`) avtomatik tushirib beradi.*
+
+### 4. Bog'liqliklar va Prisma bazasini sozlash:
+```powershell
+# Barcha paketlarni o'rnatish
+npm install
+
+# Prisma mijozini generatsiya qilish
+npm run prisma:generate -w apps/server
+# Agar yangi bo'sh PostgreSQL baza bo'lsa, jadvallarni yaratish:
+# npm run prisma:push -w apps/server
+```
+
+### 5. Ishga tushirish:
+```powershell
+# Serverni ishga tushirish:
+npm run dev:server
+
+# Desktop ilovani (Wails) ishga tushirish:
+cd apps/wails-desktop
+wails dev
+```
+

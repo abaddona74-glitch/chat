@@ -9,7 +9,7 @@ import {
   MENTION_REGEX,
   requestInlineLinkOpen,
 } from "./linkUtils";
-import { BrowserOpenURL } from "../platform/bridge";
+import { BrowserOpenURL, OpenMiniBrowser } from "../platform/bridge";
 import { FileMessageBubble } from "../components/media/FileMessageBubble";
 import { LinkPreview } from "../components/media/LinkPreview";
 import { VideoMessagePlayer } from "../components/media/VideoMessagePlayer";
@@ -110,7 +110,7 @@ export function parseMarkdownFormatting(
             if (/youtube\.com|youtu\.be|instagram\.com/i.test(linkUrl)) {
               requestInlineLinkOpen(linkUrl);
             } else {
-              BrowserOpenURL(linkUrl);
+              OpenMiniBrowser(linkUrl);
             }
           }}
         >
@@ -205,7 +205,7 @@ export function renderTextWithLinks(
               if (/youtube\.com|youtu\.be|instagram\.com/i.test(urlPart)) {
                 requestInlineLinkOpen(urlPart);
               } else {
-                BrowserOpenURL(urlPart);
+                OpenMiniBrowser(urlPart);
               }
             }}
           >

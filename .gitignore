@@ -23,5 +23,8 @@ Thumbs.db
 /apps/server/check-urls.*
 /apps/server/server*.err
 /apps/server/chat-server-deploy.tar.gz
+/apps/server/audio.mp3
+env-backup.zip
+*.zip
 scratch/
 test-results/

@@ -5,6 +5,8 @@ import (
 	"os"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/windows/registry"
 )
 
 var (
@@ -61,6 +63,29 @@ func ensureSingleInstance() {
 		os.Exit(0)
 	}
 	singleInstanceMutex = h
+	registerURLProtocol()
+}
+
+// registerURLProtocol registers chatdesktop:// protocol in Windows registry for seamless OAuth return
+func registerURLProtocol() {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	k, _, err := registry.CreateKey(registry.CURRENT_USER, `Software\Classes\chatdesktop`, registry.ALL_ACCESS)
+	if err != nil {
+		return
+	}
+	defer k.Close()
+	_ = k.SetStringValue("", "URL:ChatDesktop Protocol")
+	_ = k.SetStringValue("URL Protocol", "")
+
+	cmdKey, _, err := registry.CreateKey(registry.CURRENT_USER, `Software\Classes\chatdesktop\shell\open\command`, registry.ALL_ACCESS)
+	if err != nil {
+		return
+	}
+	defer cmdKey.Close()
+	_ = cmdKey.SetStringValue("", fmt.Sprintf(`"%s" "%%1"`, exe))
 }
 
 // releaseSingleInstanceMutex releases the mutex so a new instance can start

@@ -83,3 +83,15 @@ export function ShowInExplorer(arg1:string):Promise<boolean>;
 export function ShowOSNotification(arg1:string,arg2:string):Promise<boolean>;
 
 export function ShowWindow():Promise<void>;
+
+export function GetZeroTierNetworks():Promise<Array<any>>;
+
+export function OpenInstagramWindow():Promise<void>;
+export function SelectFileForP2P():Promise<any>;
+export function SelectSaveFileForP2P(arg1:string):Promise<string>;
+export function StartP2PReceiver(arg1:string,arg2:string):Promise<any>;
+export function StartP2PSender(arg1:string,arg2:string,arg3:string,arg4:number,arg5:string):Promise<boolean>;
+export function CancelP2PTransfer(arg1:string):Promise<boolean>;
+export function OpenFolderAndSelect(arg1:string):Promise<void>;
+
+

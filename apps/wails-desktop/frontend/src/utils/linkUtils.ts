@@ -19,6 +19,43 @@ export type OgMeta = {
 // ── OG Metadata cache (persists across re-renders) ──
 export const ogMetaCache = new Map<string, OgMeta | null>();
 export const ogMetaFetching = new Set<string>();
+const ogMetaPromises = new Map<string, Promise<OgMeta | null>>();
+
+export function fetchOgMeta(url: string): Promise<OgMeta | null> {
+  if (ogMetaCache.has(url)) {
+    return Promise.resolve(ogMetaCache.get(url) ?? null);
+  }
+  const inFlight = ogMetaPromises.get(url);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4000);
+
+  const p = fetch(`${API_URL}/og-meta?url=${encodeURIComponent(url)}`, {
+    signal: controller.signal,
+  })
+    .then((r) => {
+      clearTimeout(timer);
+      if (!r.ok) return null;
+      return r.json();
+    })
+    .then((data: OgMeta | null) => {
+      ogMetaCache.set(url, data ?? null);
+      ogMetaPromises.delete(url);
+      return data ?? null;
+    })
+    .catch(() => {
+      clearTimeout(timer);
+      ogMetaCache.set(url, null);
+      ogMetaPromises.delete(url);
+      return null;
+    });
+
+  ogMetaPromises.set(url, p);
+  return p;
+}
 
 export function getSiteName(url: string): string {
   try {

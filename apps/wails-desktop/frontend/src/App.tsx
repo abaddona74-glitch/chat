@@ -14,6 +14,21 @@ import { LocalNotifications } from "@capacitor/local-notifications";
 import { PushNotifications } from "@capacitor/push-notifications";
 import toast from "react-hot-toast";
 import { Socket } from "socket.io-client";
+import {
+  Send2,
+  Paperclip2,
+  Microphone2,
+  Location,
+  DocumentUpload,
+  Clock,
+  TickCircle,
+  SearchNormal1,
+  Call,
+  CallSlash,
+  Video,
+  VideoSlash,
+  DirectInbox,
+} from "iconsax-react";
 import { api, API_URL, persistToken, readPersistedToken } from "./lib/api";
 import {
   DEFAULT_RINGTONE_URL,
@@ -37,7 +52,10 @@ import {
   Group,
   GroupMessage,
   GroupRole,
+  ZeroTierNetwork,
+  AutoAnswerConfig,
 } from "./types";
+import { AutoAnswerModal, DEFAULT_AUTO_ANSWER_CONFIG } from "./components/modals/AutoAnswerModal";
 import { RNNoiseNode } from "simple-rnnoise-wasm";
 // @ts-ignore
 import rnnoiseWasmUrl from "simple-rnnoise-wasm/rnnoise.wasm?url";
@@ -72,6 +90,14 @@ import {
   BrowserOpenURL,
   ConsumePendingNotificationTarget,
   SetWindowCaptionTheme,
+  GetZeroTierNetworks,
+  OpenInstagramWindow,
+  SelectFileForP2P,
+  SelectSaveFileForP2P,
+  StartP2PReceiver,
+  StartP2PSender,
+  CancelP2PTransfer,
+  OpenFolderAndSelect,
   isWailsRuntime,
   isNativeMobileRuntime,
 } from "./platform/bridge";
@@ -84,6 +110,7 @@ import { EditGroupModal } from "./components/modals/EditGroupModal";
 import { AddMembersModal } from "./components/modals/AddMembersModal";
 import { MyProfileModal } from "./components/modals/MyProfileModal";
 import { ForwardModal } from "./components/modals/ForwardModal";
+import { ScheduleModal } from "./components/modals/ScheduleModal";
 import { AuthScreen } from "./components/auth/AuthScreen";
 import { CallOverlay } from "./components/call/CallOverlay";
 import { SettingsModal } from "./components/settings/SettingsModal";
@@ -153,7 +180,7 @@ type AuthStep =
   | "login2fa";
 type CallStatus = "idle" | "calling" | "ringing" | "in-call";
 type ChatMode = "user" | "group" | "saved";
-type SidebarTab = "contacts" | "groups" | "saved";
+type SidebarTab = "all" | "contacts" | "groups" | "unread";
 type MobileBottomTab = "chats" | "groups" | "settings" | "profile";
 
 type UploadResponse = {
@@ -301,13 +328,45 @@ const copyImageToClipboard = async (url: string) => {
   try {
     const res = await fetch(url);
     const blob = await res.blob();
-    await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
-    toast.success("Rasm nusxalandi");
-  } catch (err) {
-    toast.error(
-      "Nusxalashda xatolik: faqatgina text copy/paste orqali otishi mumkin",
-    );
-    console.error(err);
+
+    let pngBlob: Blob = blob;
+    if (blob.type !== "image/png") {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      const loadPromise = new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = reject;
+      });
+      img.src = URL.createObjectURL(blob);
+      await loadPromise;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth || img.width;
+      canvas.height = img.naturalHeight || img.height;
+      const ctx = canvas.getContext("2d");
+      ctx?.drawImage(img, 0, 0);
+      URL.revokeObjectURL(img.src);
+
+      pngBlob = await new Promise<Blob>((resolve) =>
+        canvas.toBlob((b) => resolve(b || blob), "image/png")
+      );
+    }
+
+    if (window.ClipboardItem) {
+      await navigator.clipboard.write([
+        new ClipboardItem({ "image/png": pngBlob }),
+      ]);
+      toast.success("Rasm nusxalandi", { icon: "📋" });
+      return;
+    }
+    throw new Error("ClipboardItem not supported");
+  } catch {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("Rasm havolasi nusxalandi", { icon: "📋" });
+    } catch {
+      toast.error("Nusxalash amalga oshmadi");
+    }
   }
 };
 
@@ -678,8 +737,32 @@ function sanitizeUnlockInput(value: string, mode: "numeric" | "text"): string {
   return value.slice(0, PASSCODE_MAX_LENGTH);
 }
 
+interface P2PTransferItem {
+  id: string;
+  peerUserId: string;
+  peerName: string;
+  fileName: string;
+  fileSize: number;
+  filePath?: string;
+  status: "offered" | "incoming" | "saving" | "transferring" | "completed" | "declined" | "cancelled" | "failed";
+  isReceiver: boolean;
+  bytes: number;
+  speed: string;
+  percent: number;
+  receiverIp?: string;
+  error?: string;
+}
+
+function formatFileSize(bytes: number): string {
+  if (!bytes || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
 function App() {
   const [token, setToken] = useState<string | null>(() => readPersistedToken());
+  const [p2pTransfers, setP2pTransfers] = useState<Record<string, P2PTransferItem>>({});
   const [isSessionBootstrapping, setIsSessionBootstrapping] = useState(() =>
     Boolean(readPersistedToken()),
   );
@@ -714,6 +797,30 @@ function App() {
   const [rightOpen, setRightOpen] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
 
+  // ── SCHEDULED / DELAY SEND & CONTEXT MENU ──
+  const [showSendMenu, setShowSendMenu] = useState(false);
+  const [sendMenuPos, setSendMenuPos] = useState({ x: 0, y: 0 });
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [scheduledMessage, setScheduledMessage] = useState<{
+    id: string;
+    chatMode: ChatMode;
+    targetId: string;
+    targetName: string;
+    messageText: string;
+    messageType: MessageType;
+    selectedFile: File | null;
+    pendingAttachments: Array<{ id: string; file: File; previewUrl: string | null }>;
+    voiceBlob: Blob | null;
+    voiceDurationSec: number | null;
+    locationLat: string;
+    locationLng: string;
+    locationAccuracy: number | null;
+    totalSec: number;
+    remainingSec: number;
+    silent?: boolean;
+  } | null>(null);
+  const scheduledTimerRef = useRef<any>(null);
+
   // ── APP LOCK / PASSCODE ──
   const [appLockEnabled, setAppLockEnabled] = useState(
     () => !!localStorage.getItem("app_lock_hash"),
@@ -736,6 +843,10 @@ function App() {
 
   // ── SETTINGS / NIGHT MODE ──
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsCategory, setSettingsCategory] = useState<
+    "general" | "call" | "design" | "security" | "developer"
+  >("general");
+  const [settingsShowPasscode, setSettingsShowPasscode] = useState(false);
   const [nightMode] = useState(true);
   const [themeAccentColor, setThemeAccentColor] = useState(() =>
     normalizeHexColor(localStorage.getItem("theme_accent_color"), "#0e7c66"),
@@ -833,6 +944,34 @@ function App() {
     }
   });
   const [showArchived, setShowArchived] = useState(false);
+  const [chatActivity, setChatActivity] = useState<Record<string, number>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("chat_activity") ?? "{}");
+    } catch {
+      return {};
+    }
+  });
+
+  const updateChatActivity = useCallback(
+    (chatId: string, timestamp?: number | string) => {
+      if (!chatId) return;
+      const t = timestamp
+        ? typeof timestamp === "string"
+          ? new Date(timestamp).getTime()
+          : timestamp
+        : Date.now();
+      if (isNaN(t) || t <= 0) return;
+      setChatActivity((prev) => {
+        if (prev[chatId] && prev[chatId] >= t) return prev;
+        const next = { ...prev, [chatId]: t };
+        try {
+          localStorage.setItem("chat_activity", JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+    },
+    [],
+  );
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -888,15 +1027,31 @@ function App() {
   const [profileViewUser, setProfileViewUser] = useState<PublicUser | null>(
     null,
   );
+  const [myZeroTierNetworks, setMyZeroTierNetworks] = useState<ZeroTierNetwork[]>([]);
 
   // ── SHIFT+CLICK SELECTION ──
   const lastSelectedIndexRef = useRef<number | null>(null);
 
 
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const [recordingDurationSec, setRecordingDurationSec] = useState(0);
   const [voiceBlob, setVoiceBlob] = useState<Blob | null>(null);
   const [voiceDurationSec, setVoiceDurationSec] = useState<number | null>(null);
   const [recordingWaveform, setRecordingWaveform] = useState<number[]>([]);
+
+  const shouldSendVoiceOnStopRef = useRef(false);
+  const recordMouseDownTimeRef = useRef(0);
+  const isHoldRecordingRef = useRef(false);
+  const isRecordingVoiceRef = useRef(false);
+  isRecordingVoiceRef.current = isRecordingVoice;
+  const recordTimerIntervalRef = useRef<number | null>(null);
+  const sendVoiceBlobRef = useRef<((blob: Blob, duration: number) => Promise<void>) | null>(null);
+
+  const formatDuration = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${s < 10 ? "0" : ""}${s}`;
+  };
 
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
@@ -1028,7 +1183,7 @@ function App() {
   const [chatMode, setChatMode] = useState<ChatMode>("user");
   const chatModeRef = useRef(chatMode);
   chatModeRef.current = chatMode;
-  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("contacts");
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("all");
   const [mobileBottomTab, setMobileBottomTab] =
     useState<MobileBottomTab>("chats");
   const [isMobileChatOpen, setIsMobileChatOpen] = useState(false);
@@ -1075,6 +1230,27 @@ function App() {
   >({});
   const vadIntervalRef = useRef<number | null>(null);
   const wasSpeakingRef = useRef(false);
+  // ── AUTO-ANSWER (AVTO-JAVOBGICH) STATE ──
+  const [autoAnswerConfig, setAutoAnswerConfig] = useState<AutoAnswerConfig>(() => {
+    try {
+      const raw = localStorage.getItem("chat_auto_answer_config");
+      if (raw) return { ...DEFAULT_AUTO_ANSWER_CONFIG, ...JSON.parse(raw) };
+    } catch {}
+    return DEFAULT_AUTO_ANSWER_CONFIG;
+  });
+  const autoAnswerConfigRef = useRef<AutoAnswerConfig>(autoAnswerConfig);
+  autoAnswerConfigRef.current = autoAnswerConfig;
+  const [isAutoAnswerModalOpen, setIsAutoAnswerModalOpen] = useState(false);
+  const autoAnswerTimerRef = useRef<number | null>(null);
+  const isAutoAnsweringRef = useRef(false);
+
+  const updateAutoAnswerConfig = useCallback((next: AutoAnswerConfig) => {
+    setAutoAnswerConfig(next);
+    autoAnswerConfigRef.current = next;
+    try {
+      localStorage.setItem("chat_auto_answer_config", JSON.stringify(next));
+    } catch {}
+  }, []);
 
   // ── AUTO-UPDATE STATE ──
   const [updateAvailable, setUpdateAvailable] = useState<{
@@ -1216,8 +1392,22 @@ function App() {
     packetsRecv: number;
   } | null>(null);
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const triggerDirectIceRestartRef = useRef<(() => Promise<void>) | null>(null);
+  const iceRestartNeededRef = useRef<boolean>(false);
+  const lastIceRestartTsRef = useRef<number>(0);
   const remoteIceCandidatesBufferRef = useRef<RTCIceCandidateInit[]>([]);
   const remoteDescriptionSetRef = useRef<boolean>(false);
+  const pendingOutboxQueueRef = useRef<
+    Array<{
+      id: string;
+      chatMode: "user" | "group";
+      targetId: string;
+      event: string;
+      payload: any;
+    }>
+  >([]);
+  const isFlushingOutboxRef = useRef(false);
+  const flushOutboxQueueRef = useRef<(() => Promise<void>) | null>(null);
   const googleAuthStateRef = useRef<string | null>(
     localStorage.getItem("pending_google_auth_state"),
   );
@@ -1535,6 +1725,28 @@ function App() {
           upKbps = 0;
           downKbps = 0;
           rttSec = null;
+        }
+
+        // WebRTC Auto-Heal Watchdog: if traffic stalled (down=0 or disconnected) during active call
+        if (
+          !isGroupCall &&
+          callStatusRef.current === "in-call" &&
+          durationSec > 6 &&
+          isSocketOk &&
+          isOnline
+        ) {
+          const isStalled = isConnDisconnected || (downKbps === 0 && durationSec > 8);
+          const timeSinceRestart = now - lastIceRestartTsRef.current;
+          if (isStalled && timeSinceRestart > 10000) {
+            console.warn(
+              "[WebRTC Auto-Heal] Traffic stalled (down=0 or ICE disconnected). Triggering auto ICE restart...",
+            );
+            void triggerDirectIceRestartRef.current?.();
+            const audio = remoteAudioRef.current;
+            if (audio && (audio.paused || audio.readyState < 2)) {
+              audio.play().catch(() => {});
+            }
+          }
         }
 
         setCallStats({
@@ -2956,10 +3168,15 @@ function App() {
     const response = await api.get<{ users: PublicUser[] }>("/users");
     const fetchedUsers = response.data.users ?? [];
     setUsers(fetchedUsers);
+    fetchedUsers.forEach((u) => {
+      if (u.lastMessageAt) {
+        updateChatActivity(u.id, u.lastMessageAt);
+      }
+    });
     if (!selectedUserIdRef.current && fetchedUsers.length > 0) {
       setSelectedUserId(fetchedUsers[0].id);
     }
-  }, []);
+  }, [updateChatActivity]);
 
   const fetchMessages = useCallback(async (otherUserId: string) => {
     if (!otherUserId) {
@@ -2972,6 +3189,12 @@ function App() {
         `/messages/${otherUserId}?limit=50`,
       );
       setMessages(response.data.messages);
+      if (response.data.messages && response.data.messages.length > 0) {
+        const last = response.data.messages[response.data.messages.length - 1];
+        if (last?.createdAt) {
+          updateChatActivity(otherUserId, last.createdAt);
+        }
+      }
       // Mark messages from the other user as read
       api.post(`/messages/read/${otherUserId}`).catch(() => {});
       if (socketRef.current) {
@@ -2980,16 +3203,22 @@ function App() {
     } finally {
       setIsLoadingMessages(false);
     }
-  }, []);
+  }, [updateChatActivity]);
 
   const fetchGroups = useCallback(async () => {
     try {
       const response = await api.get<{ groups: Group[] }>("/groups");
-      setGroups(response.data.groups ?? []);
+      const fetchedGroups = response.data.groups ?? [];
+      setGroups(fetchedGroups);
+      fetchedGroups.forEach((g) => {
+        if (g.updatedAt || g.createdAt) {
+          updateChatActivity(g.id, g.updatedAt || g.createdAt);
+        }
+      });
     } catch {
       // silent
     }
-  }, []);
+  }, [updateChatActivity]);
 
   const markGroupMessagesSeen = useCallback(
     (groupId: string, messagesToCheck: GroupMessage[]) => {
@@ -3035,12 +3264,18 @@ function App() {
         );
         const fetchedMessages = response.data.messages ?? [];
         setGroupMessages(fetchedMessages);
+        if (fetchedMessages.length > 0) {
+          const last = fetchedMessages[fetchedMessages.length - 1];
+          if (last?.createdAt) {
+            updateChatActivity(groupId, last.createdAt);
+          }
+        }
         markGroupMessagesSeen(groupId, fetchedMessages);
       } finally {
         setIsLoadingGroupMessages(false);
       }
     },
-    [markGroupMessagesSeen],
+    [markGroupMessagesSeen, updateChatActivity],
   );
 
   const fetchMe = useCallback(async () => {
@@ -3341,6 +3576,11 @@ function App() {
         clearActiveCallState();
       }
       callGroupIdRef.current = null;
+      if (autoAnswerTimerRef.current) {
+        window.clearTimeout(autoAnswerTimerRef.current);
+        autoAnswerTimerRef.current = null;
+      }
+      isAutoAnsweringRef.current = false;
       pendingIceCandidatesRef.current = [];
       remoteIceCandidatesBufferRef.current = [];
       remoteDescriptionSetRef.current = false;
@@ -3645,7 +3885,6 @@ function App() {
 
       master = ctx.createGain();
       master.gain.value = 1.0;
-      master.connect(dest);
 
       const silentGain = ctx.createGain();
       silentGain.gain.value = 0;
@@ -3660,33 +3899,16 @@ function App() {
   }, []);
 
   const syncGroupRemoteAudio = useCallback(() => {
+    // In group calls, each participant has a dedicated HTMLAudioElement in groupParticipantAudiosRef.
+    // remoteAudioRef is kept inactive/paused to prevent duplicate playback / acoustic echo.
     const audio = remoteAudioRef.current;
-    if (!audio) return;
-    const { dest, ctx } = ensureGroupAudioGraph();
-    if (ctx.state === "suspended") {
-      ctx.resume().catch(() => {});
+    if (audio) {
+      audio.srcObject = null;
+      try {
+        audio.pause();
+      } catch {}
     }
-    if (audio.srcObject !== dest.stream) {
-      audio.srcObject = dest.stream;
-    }
-    audio.muted = false;
-    audio.volume = toMediaElementVolume(speakerVolumeRef.current);
-    if (
-      selectedAudioOutputRef.current &&
-      typeof (
-        audio as HTMLAudioElement & {
-          setSinkId?: (id: string) => Promise<void>;
-        }
-      ).setSinkId === "function"
-    ) {
-      (audio as HTMLAudioElement & { setSinkId: (id: string) => Promise<void> })
-        .setSinkId(selectedAudioOutputRef.current)
-        .catch((err) => {
-          console.warn("[WebRTC] group setSinkId failed:", err);
-        });
-    }
-    audio.play().catch(() => {});
-  }, [ensureGroupAudioGraph]);
+  }, []);
 
   const attachGroupParticipantTrack = useCallback(
     (targetUserId: string, track: MediaStreamTrack) => {
@@ -3786,14 +4008,15 @@ function App() {
           stream,
           track,
         });
-        syncGroupRemoteAudio();
+        // Note: We deliberately do NOT call syncGroupRemoteAudio here.
+        // Direct audioEl above handles playback; playing through remoteAudioRef simultaneously caused echo.
       } catch (err) {
         console.warn("[WebRTC] attachGroupParticipantTrack WebAudio warning:", err);
       }
 
       groupRemoteAudioTracksRef.current.set(targetUserId, track);
     },
-    [ensureGroupAudioGraph, syncGroupRemoteAudio],
+    [ensureGroupAudioGraph],
   );
 
   const detachGroupParticipantTrack = useCallback((targetUserId: string) => {
@@ -3956,6 +4179,46 @@ function App() {
         // Show call notification via Wails & bring window to front
         ShowCallNotif(callerName).catch(() => {});
         ShowWindow().catch(() => {});
+
+        // Check if Auto-Answer applies
+        const autoCfg = autoAnswerConfigRef.current;
+        const isAutoTarget =
+          autoCfg.enabled &&
+          (autoCfg.mode === "all" ||
+            autoCfg.selectedUserIds.includes(payload.fromUserId));
+
+        if (isAutoTarget) {
+          console.info(
+            `[AutoAnswer] Incoming call from ${payload.fromUserId} matches Auto-Answer rules!`,
+          );
+          toast(
+            `🤖 Avto-javobgich: ${callerName} qo'ng'irog'i ${autoCfg.delaySeconds} soniyada qabul qilinadi...`,
+            { icon: "📞", duration: 5000 },
+          );
+
+          if (autoAnswerTimerRef.current) {
+            window.clearTimeout(autoAnswerTimerRef.current);
+          }
+
+          autoAnswerTimerRef.current = window.setTimeout(async () => {
+            autoAnswerTimerRef.current = null;
+            if (callStatusRef.current === "ringing") {
+              console.info("[AutoAnswer] Auto accepting call now...");
+              isAutoAnsweringRef.current = true;
+
+              if (autoCfg.sendChatMessage && socketRef.current) {
+                socketRef.current.emit("message:send", {
+                  recipientId: payload.fromUserId,
+                  text: `🤖 [Avto-javobgich (${
+                    autoCfg.voice === "uz-UZ-SardorNeural" ? "Sardor" : "Madina"
+                  })]: ${autoCfg.greetingText}`,
+                });
+              }
+
+              await acceptCallRef.current();
+            }
+          }, Math.max(1, autoCfg.delaySeconds) * 1000);
+        }
         if (isNativeMobileRuntime) {
           await showMobileIncomingCallNotification(
             "Incoming call",
@@ -4217,6 +4480,31 @@ function App() {
       );
 
       socket.on(
+        "user:zerotier:updated",
+        (payload: {
+          userId: string;
+          zerotierNetworks: ZeroTierNetwork[];
+        }) => {
+          setUsers((prev) =>
+            prev.map((user) =>
+              user.id === payload.userId
+                ? {
+                    ...user,
+                    zerotierNetworks: payload.zerotierNetworks,
+                  }
+                : user,
+            ),
+          );
+          setProfileViewUser((prev) => {
+            if (prev && prev.id === payload.userId) {
+              return { ...prev, zerotierNetworks: payload.zerotierNetworks };
+            }
+            return prev;
+          });
+        },
+      );
+
+      socket.on(
         "user:profile-updated",
         (payload: {
           userId: string;
@@ -4274,8 +4562,16 @@ function App() {
         );
       });
 
+      socket.on("scheduled:sent", (payload: { id: string }) => {
+        setScheduledMessage((prev) => (prev?.id === payload.id ? null : prev));
+      });
+
       socket.on("message:new", async (message: Message) => {
         const me = currentUserIdRef.current;
+        const partnerId =
+          message.senderId === me ? message.recipientId : message.senderId;
+        updateChatActivity(partnerId, message.createdAt);
+
         const meUser = usersRef.current.find((u) => u.id === me) ?? currentUser;
         const selected = selectedUserIdRef.current;
         const isActiveConversation =
@@ -4437,6 +4733,127 @@ function App() {
           });
         },
       );
+
+      // ── P2P ZeroTier File Transfer Listeners ──
+      socket.on(
+        "p2p:incoming-transfer",
+        (payload: {
+          fromUserId: string;
+          transferId: string;
+          fileName: string;
+          fileSize: number;
+          senderName?: string;
+        }) => {
+          if (!payload?.transferId) return;
+          setP2pTransfers((prev) => ({
+            ...prev,
+            [payload.transferId]: {
+              id: payload.transferId,
+              peerUserId: payload.fromUserId,
+              peerName: payload.senderName || "Do'stingiz",
+              fileName: payload.fileName,
+              fileSize: payload.fileSize,
+              status: "incoming",
+              isReceiver: true,
+              bytes: 0,
+              speed: "0 MB/s",
+              percent: 0,
+            },
+          }));
+          toast(
+            `🌐 ZeroTier P2P: ${payload.senderName || "Foydalanuvchi"} sizga fayl yubormoqchi (${payload.fileName})`,
+            { icon: "📁", duration: 7000 },
+          );
+        },
+      );
+
+      socket.on(
+        "p2p:transfer-accepted",
+        (payload: {
+          fromUserId: string;
+          transferId: string;
+          receiverIp: string;
+          port: number;
+          secretToken: string;
+        }) => {
+          if (!payload?.transferId) return;
+          setP2pTransfers((prev) => {
+            const item = prev[payload.transferId];
+            if (!item) return prev;
+            if (item.filePath) {
+              void StartP2PSender(
+                item.id,
+                item.filePath,
+                payload.receiverIp,
+                payload.port,
+                payload.secretToken,
+              );
+            }
+            return {
+              ...prev,
+              [payload.transferId]: {
+                ...item,
+                status: "transferring",
+                receiverIp: payload.receiverIp,
+              },
+            };
+          });
+          toast.success("ZeroTier P2P qabul qilindi! Uzatish boshlandi.");
+        },
+      );
+
+      socket.on(
+        "p2p:transfer-declined",
+        (payload: { fromUserId: string; transferId: string; reason?: string }) => {
+          if (!payload?.transferId) return;
+          setP2pTransfers((prev) => {
+            const item = prev[payload.transferId];
+            if (!item) return prev;
+            return {
+              ...prev,
+              [payload.transferId]: {
+                ...item,
+                status: "declined",
+                error: payload.reason || "Qabul qiluvchi rad etdi",
+              },
+            };
+          });
+          toast.error("ZeroTier P2P: Foydalanuvchi faylni rad etdi.");
+        },
+      );
+
+      socket.on(
+        "p2p:transfer-cancelled",
+        (payload: { fromUserId: string; transferId: string }) => {
+          if (!payload?.transferId) return;
+          void CancelP2PTransfer(payload.transferId);
+          setP2pTransfers((prev) => {
+            const copy = { ...prev };
+            delete copy[payload.transferId];
+            return copy;
+          });
+          toast("ZeroTier P2P uzatish bekor qilindi.", { icon: "ℹ️" });
+        },
+      );
+
+      socket.on(
+        "p2p:transfer-completed",
+        (payload: { fromUserId: string; transferId: string }) => {
+          if (!payload?.transferId) return;
+          setP2pTransfers((prev) => {
+            const item = prev[payload.transferId];
+            if (!item) return prev;
+            return {
+              ...prev,
+              [payload.transferId]: {
+                ...item,
+                status: "completed",
+                percent: 100,
+              },
+            };
+          });
+        },
+      );
     },
     [fetchUsers, notifyIncoming],
   );
@@ -4471,6 +4888,7 @@ function App() {
       });
 
       socket.on("group:message:new", async (message: GroupMessage) => {
+        updateChatActivity(message.groupId, message.createdAt);
         const me = currentUserIdRef.current;
         const meUser = usersRef.current.find((u) => u.id === me) ?? currentUser;
         const selectedGrp = selectedGroupIdRef.current;
@@ -4962,6 +5380,24 @@ function App() {
     ],
   );
 
+  const syncZeroTierNetworks = useCallback(async (activeSocket?: Socket | null) => {
+    if (!isWailsRuntime) return;
+    try {
+      const nets = await GetZeroTierNetworks();
+      if (Array.isArray(nets)) {
+        setMyZeroTierNetworks(nets as ZeroTierNetwork[]);
+        const sock = activeSocket || socketRef.current;
+        if (sock?.connected) {
+          sock.emit("user:zerotier:sync", { networks: nets });
+        } else {
+          void api.put("/users/zerotier", { networks: nets }).catch(() => {});
+        }
+      }
+    } catch (e) {
+      console.error("[ZeroTier] Sync error:", e);
+    }
+  }, []);
+
   useEffect(() => {
     if (!token || (appLocked && appLockEnabled)) {
       return;
@@ -4979,6 +5415,7 @@ function App() {
         if (cancelled) {
           return;
         }
+        void syncZeroTierNetworks();
         setIsSessionBootstrapping(false);
         setSessionBootstrapError(null);
         const socket = createSocket(token, appVersionRef.current);
@@ -4987,13 +5424,58 @@ function App() {
         socket.on("connect", () => {
           hasSocketConnectedOnceRef.current = true;
           setIsSocketConnected(true);
+          void syncZeroTierNetworks(socket);
+
+          // Flush any ICE candidates that were queued while socket was down
+          const target = callPeerIdRef.current;
+          if (target && socket.connected && pendingIceCandidatesRef.current.length > 0) {
+            console.info(
+              `[WebRTC] Socket reconnected, flushing ${pendingIceCandidatesRef.current.length} queued ICE candidates`,
+            );
+            while (pendingIceCandidatesRef.current.length > 0) {
+              const c = pendingIceCandidatesRef.current.shift();
+              if (c) {
+                socket.emit("call:ice-candidate", {
+                  recipientId: target,
+                  candidate: c,
+                });
+              }
+            }
+          }
+
           if (callDisconnectedTimerRef.current && callStatusRef.current !== "idle") {
             window.clearTimeout(callDisconnectedTimerRef.current);
             callDisconnectedTimerRef.current = null;
           }
+
+          // If call is active during socket reconnection, heal connection
+          if (callStatusRef.current === "in-call" && !callGroupIdRef.current) {
+            const peer = peerConnectionRef.current;
+            const isConnBad =
+              !peer ||
+              peer.iceConnectionState !== "connected" ||
+              peer.connectionState !== "connected";
+            if (iceRestartNeededRef.current || isConnBad) {
+              console.info(
+                "[WebRTC] Socket reconnected while call degraded — triggering auto ICE restart",
+              );
+              void triggerDirectIceRestartRef.current?.();
+            }
+          }
+
           if (selectedGroupIdRef.current) {
             requestGroupCallStatus(selectedGroupIdRef.current);
           }
+
+          // Silent sync on reconnect: refresh message history if conversation is open
+          if (selectedUserIdRef.current) {
+            fetchMessages(selectedUserIdRef.current).catch(() => {});
+          } else if (selectedGroupIdRef.current) {
+            fetchGroupMessages(selectedGroupIdRef.current).catch(() => {});
+          }
+
+          // Flush offline queued messages automatically
+          void flushOutboxQueueRef.current?.();
         });
         socket.on("disconnect", () => {
           setIsSocketConnected(false);
@@ -5058,12 +5540,37 @@ function App() {
   useEffect(() => {
     const onOnline = () => {
       setNetworkOnline(true);
+      if (callDisconnectedTimerRef.current) {
+        window.clearTimeout(callDisconnectedTimerRef.current);
+        callDisconnectedTimerRef.current = null;
+      }
+      toast.success("Internet tiklandi. Aloqa ulandi.", {
+        id: "net-status",
+        duration: 3000,
+      });
+      if (socketRef.current && !socketRef.current.connected) {
+        console.info("[Network] Online event received — reconnecting socket immediately");
+        socketRef.current.connect();
+      }
+      void flushOutboxQueueRef.current?.();
     };
+
     const onOffline = () => {
       setNetworkOnline(false);
-      if (callStatusRef.current !== "idle") {
-        stopCall(true);
-        toast.error("Internet uzildi. Call avtomatik tugatildi.");
+      // Soat 12 da yoki router qayta yuklanganda qo'ng'iroqni zudlik bilan o'ldirmaymiz!
+      // 45 soniya sabr qilamiz, internet kelishi bilan aloqa avtomatik tiklanadi.
+      if (callStatusRef.current !== "idle" && !callDisconnectedTimerRef.current) {
+        toast("Internet uzildi. Qayta ulanish kutilmoqda...", {
+          id: "net-status",
+          duration: 5000,
+        });
+        callDisconnectedTimerRef.current = window.setTimeout(() => {
+          callDisconnectedTimerRef.current = null;
+          if (callStatusRef.current !== "idle" && !navigator.onLine) {
+            stopCall(false);
+            toast.error("Internet aloqasi tiklanmadi (45s). Qo'ng'iroq tugatildi.");
+          }
+        }, 45000);
       }
     };
 
@@ -5115,6 +5622,112 @@ function App() {
     },
     [selectedUserId],
   );
+
+  // ── P2P ZeroTier File Transfer Handlers ──
+  const handleStartP2PTransfer = useCallback(async () => {
+    if (chatMode !== "user" || !selectedUserId) {
+      toast.error("Iltimos, avval shaxsiy chatni tanlang.");
+      return;
+    }
+    const targetUser = users.find((u) => u.id === selectedUserId);
+    if (!targetUser) {
+      toast.error("Foydalanuvchi topilmadi.");
+      return;
+    }
+
+    const file = await SelectFileForP2P();
+    if (!file || !file.filePath) return;
+
+    const transferId = "p2p_" + Date.now() + "_" + Math.random().toString(36).substring(2, 8);
+    const item: P2PTransferItem = {
+      id: transferId,
+      peerUserId: targetUser.id,
+      peerName: targetUser.displayName || targetUser.username || "Foydalanuvchi",
+      fileName: file.fileName,
+      fileSize: file.fileSize,
+      filePath: file.filePath,
+      status: "offered",
+      isReceiver: false,
+      bytes: 0,
+      speed: "0 MB/s",
+      percent: 0,
+    };
+    setP2pTransfers((prev) => ({ ...prev, [transferId]: item }));
+
+    socketRef.current?.emit("p2p:transfer-request", {
+      toUserId: targetUser.id,
+      transferId,
+      fileName: file.fileName,
+      fileSize: file.fileSize,
+      senderName: currentUser?.displayName || currentUser?.username || "Men",
+    });
+    toast.success("ZeroTier P2P: Fayl taklifi yuborildi!");
+  }, [chatMode, selectedUserId, users, currentUser]);
+
+  const handleAcceptP2P = useCallback(async (transfer: P2PTransferItem) => {
+    const myZeroTierNets = await GetZeroTierNetworks();
+    const myZtIp = myZeroTierNets?.find((n) => n.ip && n.status === "OK")?.ip || myZeroTierNets?.[0]?.ip;
+    if (!myZtIp) {
+      toast.error("ZeroTier IP topilmadi! ZeroTier tarmog'iga ulanganingizni tekshiring.");
+      return;
+    }
+
+    const savePath = await SelectSaveFileForP2P(transfer.fileName);
+    if (!savePath) return;
+
+    setP2pTransfers((prev) => ({
+      ...prev,
+      [transfer.id]: { ...prev[transfer.id], status: "saving", filePath: savePath },
+    }));
+
+    const res = await StartP2PReceiver(transfer.id, savePath);
+    if (!res || !res.port) {
+      toast.error("Qabul qiluvchi portini ochib bo'lmadi.");
+      setP2pTransfers((prev) => ({
+        ...prev,
+        [transfer.id]: { ...prev[transfer.id], status: "failed", error: "Port ochib bo'lmadi" },
+      }));
+      return;
+    }
+
+    socketRef.current?.emit("p2p:transfer-accept", {
+      toUserId: transfer.peerUserId,
+      transferId: transfer.id,
+      receiverIp: myZtIp,
+      port: res.port,
+      secretToken: res.secretToken,
+    });
+
+    setP2pTransfers((prev) => ({
+      ...prev,
+      [transfer.id]: { ...prev[transfer.id], status: "transferring", receiverIp: myZtIp },
+    }));
+  }, []);
+
+  const handleDeclineP2P = useCallback((transferId: string, peerUserId: string) => {
+    socketRef.current?.emit("p2p:transfer-decline", { toUserId: peerUserId, transferId });
+    setP2pTransfers((prev) => {
+      const copy = { ...prev };
+      delete copy[transferId];
+      return copy;
+    });
+  }, []);
+
+  const handleCancelP2P = useCallback(async (transferId: string, peerUserId: string) => {
+    await CancelP2PTransfer(transferId);
+    socketRef.current?.emit("p2p:transfer-cancel", { toUserId: peerUserId, transferId });
+    setP2pTransfers((prev) => {
+      const copy = { ...prev };
+      delete copy[transferId];
+      return copy;
+    });
+    toast("P2P uzatish bekor qilindi.", { icon: "ℹ️" });
+  }, []);
+
+  const handleOpenP2PFolder = useCallback(async (filePath?: string) => {
+    if (!filePath) return;
+    await OpenFolderAndSelect(filePath);
+  }, []);
 
   const handleGetLocation = () => {
     setMessageType("LOCATION");
@@ -5595,15 +6208,16 @@ function App() {
   };
 
   const startVoiceRecording = async () => {
+    if (isRecordingVoiceRef.current) return;
     try {
       const audioConstraints: any = {
         noiseSuppression: noiseReduction,
-        echoCancellation: noiseReduction,
-        autoGainControl: noiseReduction,
-        googEchoCancellation: noiseReduction,
-        googAutoGainControl: noiseReduction,
+        echoCancellation: true,
+        autoGainControl: true,
+        googEchoCancellation: true,
+        googAutoGainControl: true,
         googNoiseSuppression: noiseReduction,
-        googHighpassFilter: noiseReduction,
+        googHighpassFilter: true,
         googTypingNoiseDetection: noiseReduction,
         ...(selectedAudioInput
           ? { deviceId: { exact: selectedAudioInput } }
@@ -5648,13 +6262,19 @@ function App() {
 
       recorder.onstop = () => {
         const blob = new Blob(chunks, { type: "audio/webm" });
-        setVoiceBlob(blob);
         const duration = Math.max(
           1,
           Math.round((Date.now() - recordStartedAtRef.current) / 1000),
         );
-        setVoiceDurationSec(duration);
         audioCtx.close();
+
+        if (shouldSendVoiceOnStopRef.current) {
+          void sendVoiceBlobRef.current?.(blob, duration);
+        } else {
+          setVoiceBlob(null);
+          setVoiceDurationSec(null);
+          setMessageType("TEXT");
+        }
       };
 
       recordStartedAtRef.current = Date.now();
@@ -5663,23 +6283,93 @@ function App() {
       recorder.start();
       setMessageType("VOICE");
       setIsRecordingVoice(true);
-      toast("Recording started.");
+      setRecordingDurationSec(0);
+
+      if (recordTimerIntervalRef.current) clearInterval(recordTimerIntervalRef.current);
+      recordTimerIntervalRef.current = window.setInterval(() => {
+        setRecordingDurationSec(
+          Math.round((Date.now() - recordStartedAtRef.current) / 1000),
+        );
+      }, 250);
     } catch {
+      isHoldRecordingRef.current = false;
       toast.error("Could not access microphone.");
     }
   };
 
-  const stopVoiceRecording = () => {
+  const stopVoiceRecording = useCallback((shouldSend: boolean = true) => {
+    shouldSendVoiceOnStopRef.current = shouldSend;
+    isHoldRecordingRef.current = false;
+    if (recordTimerIntervalRef.current) {
+      clearInterval(recordTimerIntervalRef.current);
+      recordTimerIntervalRef.current = null;
+    }
     cancelAnimationFrame(waveformAnimRef.current);
     analyserRef.current = null;
     setRecordingWaveform([]);
-    mediaRecorderRef.current?.stop();
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== "inactive"
+    ) {
+      mediaRecorderRef.current.stop();
+    }
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-    mediaRecorderRef.current = null;
     mediaStreamRef.current = null;
     setIsRecordingVoice(false);
-    toast.success("Voice recording ready.");
+    setRecordingDurationSec(0);
+  }, []);
+
+  const cancelVoiceRecording = useCallback(() => {
+    stopVoiceRecording(false);
+    toast("Ovozli xabar bekor qilindi", { icon: "🗑️" });
+  }, [stopVoiceRecording]);
+
+  const handleMicMouseDown = (e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    if (isRecordingVoiceRef.current) {
+      stopVoiceRecording(true);
+      return;
+    }
+    recordMouseDownTimeRef.current = Date.now();
+    isHoldRecordingRef.current = true;
+    void startVoiceRecording();
   };
+
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      if (!isHoldRecordingRef.current) return;
+      const holdDuration = Date.now() - recordMouseDownTimeRef.current;
+      isHoldRecordingRef.current = false;
+
+      if (holdDuration >= 500) {
+        // Held for >= 500ms and released: SEND immediately!
+        stopVoiceRecording(true);
+      } else {
+        // Quick click on PC: stay in toggle mode so user can speak and click Send!
+      }
+    };
+
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (isRecordingVoiceRef.current) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          cancelVoiceRecording();
+        } else if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          stopVoiceRecording(true);
+        }
+      }
+    };
+
+    window.addEventListener("mouseup", handleGlobalMouseUp);
+    window.addEventListener("touchend", handleGlobalMouseUp);
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => {
+      window.removeEventListener("mouseup", handleGlobalMouseUp);
+      window.removeEventListener("touchend", handleGlobalMouseUp);
+      window.removeEventListener("keydown", handleGlobalKeyDown);
+    };
+  }, [cancelVoiceRecording, stopVoiceRecording]);
 
   useEffect(() => {
     pendingAttachmentsRef.current = pendingAttachments;
@@ -5783,6 +6473,71 @@ function App() {
     return response.data;
   };
 
+  const sendVoiceBlob = useCallback(
+    async (blob: Blob, durationSec: number) => {
+      if (!networkOnline) {
+        toast.error("Fayl yuklash uchun internet aloqasi kerak.");
+        return;
+      }
+      setIsSending(true);
+      try {
+        const file = new File([blob], `voice-${Date.now()}.webm`, {
+          type: "audio/webm",
+        });
+        const uploaded = await uploadFile(file);
+
+        if (chatMode === "group") {
+          const groupPayload = {
+            groupId: selectedGroupId,
+            type: "VOICE" as MessageType,
+            fileUrl: uploaded.url,
+            fileName: uploaded.fileName,
+            fileMime: uploaded.fileMime,
+            fileSize: uploaded.fileSize,
+            durationSec,
+          };
+          await withSocketAck<GroupMessage>("group:message:send", groupPayload);
+          updateChatActivity(selectedGroupId, Date.now());
+        } else {
+          const payload = {
+            recipientId: selectedUserId,
+            type: "VOICE" as MessageType,
+            fileUrl: uploaded.url,
+            fileName: uploaded.fileName,
+            fileMime: uploaded.fileMime,
+            fileSize: uploaded.fileSize,
+            durationSec,
+          };
+          await withSocketAck<Message>("message:send", payload);
+          updateChatActivity(selectedUserId, Date.now());
+        }
+
+        if (sendSound) playMessageSentSound();
+      } catch (error) {
+        toast.error(readAxiosMessage(error, "Ovozli xabar yuborilmadi."));
+      } finally {
+        setIsSending(false);
+        setUploadProgress(0);
+        setVoiceBlob(null);
+        setVoiceDurationSec(null);
+        setMessageType("TEXT");
+      }
+    },
+    [
+      chatMode,
+      networkOnline,
+      selectedGroupId,
+      selectedUserId,
+      sendSound,
+      updateChatActivity,
+      withSocketAck,
+    ],
+  );
+
+  useEffect(() => {
+    sendVoiceBlobRef.current = sendVoiceBlob;
+  }, [sendVoiceBlob]);
+
   const applyRingtoneSource = useCallback(
     (sourceUrl: string, label: string) => {
       const safeUrl = setRingtoneSource(sourceUrl, label);
@@ -5866,7 +6621,47 @@ function App() {
     window.setTimeout(() => stopAllCallSounds(), 5000);
   }, [dialToneUrl]);
 
-  const sendMessage = async () => {
+  const flushOutboxQueue = useCallback(async () => {
+    if (!socketRef.current?.connected || isFlushingOutboxRef.current) return;
+    if (pendingOutboxQueueRef.current.length === 0) return;
+    isFlushingOutboxRef.current = true;
+    try {
+      while (
+        pendingOutboxQueueRef.current.length > 0 &&
+        socketRef.current?.connected
+      ) {
+        const item = pendingOutboxQueueRef.current[0];
+        try {
+          const ack = await withSocketAck<any>(item.event, item.payload);
+          pendingOutboxQueueRef.current.shift();
+          if (item.chatMode === "user") {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === item.id ? { ...ack, isPending: false } : m,
+              ),
+            );
+          } else {
+            setGroupMessages((prev) =>
+              prev.map((m) =>
+                m.id === item.id ? { ...ack, isPending: false } : m,
+              ),
+            );
+          }
+        } catch (err) {
+          console.warn(
+            "[Outbox] Send failed, will retry on next reconnect:",
+            err,
+          );
+          break;
+        }
+      }
+    } finally {
+      isFlushingOutboxRef.current = false;
+    }
+  }, [withSocketAck]);
+  flushOutboxQueueRef.current = flushOutboxQueue;
+
+  const sendMessage = async (options?: { silent?: boolean }) => {
     if (chatMode === "user" && !selectedUserId) {
       toast("Select a user first.");
       return;
@@ -5875,10 +6670,15 @@ function App() {
       toast("Select a group first.");
       return;
     }
-    if (!networkOnline || !socketRef.current?.connected) {
-      toast.error("Internet yoki socket ulanishi yo'q. Qayta urinib ko'ring.");
+    if (
+      messageType === "TEXT" &&
+      !messageText.trim() &&
+      !selectedFile &&
+      pendingAttachments.length === 0
+    ) {
       return;
     }
+    const isOffline = !networkOnline || !socketRef.current?.connected;
     if (isSending) return;
 
     setIsSending(true);
@@ -5893,7 +6693,6 @@ function App() {
         if (messageType === "TEXT") {
           const text = messageText.trim();
           if (!text) {
-            toast.error("Message is empty.");
             return;
           }
           groupPayload.text = text;
@@ -5916,6 +6715,10 @@ function App() {
           groupPayload.latitude = latitude;
           groupPayload.longitude = longitude;
         } else {
+          if (isOffline) {
+            toast.error("Fayl yuklash uchun internet aloqasi kerak.");
+            return;
+          }
           if (messageType === "FILE") {
             const files =
               pendingAttachments.length > 0
@@ -5967,7 +6770,33 @@ function App() {
         }
 
         if (groupPayload) {
-          await withSocketAck<GroupMessage>("group:message:send", groupPayload);
+          if (isOffline) {
+            const pendingId = "pending-" + Date.now();
+            const localGroupMsg: GroupMessage = {
+              id: pendingId,
+              groupId: selectedGroupId,
+              senderId: currentUserIdRef.current,
+              type: messageType,
+              text: (groupPayload.text as string) || null,
+              createdAt: new Date().toISOString(),
+              sender: currentUser ?? undefined,
+              isPending: true,
+            };
+            setGroupMessages((prev) => [...prev, localGroupMsg]);
+            pendingOutboxQueueRef.current.push({
+              id: pendingId,
+              chatMode: "group",
+              targetId: selectedGroupId,
+              event: "group:message:send",
+              payload: groupPayload,
+            });
+            toast("Xabar saqlandi. Internet tiklanishi bilan ketadi.", {
+              id: "outbox",
+              icon: "🕒",
+            });
+          } else {
+            await withSocketAck<GroupMessage>("group:message:send", groupPayload);
+          }
         }
       } else {
         // ── USER MESSAGE ──
@@ -5992,7 +6821,6 @@ function App() {
         if (messageType === "TEXT") {
           const text = messageText.trim();
           if (!text) {
-            toast.error("Message is empty.");
             return;
           }
           payload = { recipientId: selectedUserId, type: "TEXT", text };
@@ -6071,7 +6899,32 @@ function App() {
         }
 
         if (payload) {
-          await withSocketAck<Message>("message:send", payload);
+          if (isOffline) {
+            const pendingId = "pending-" + Date.now();
+            const localMsg: Message = {
+              id: pendingId,
+              senderId: currentUserIdRef.current,
+              recipientId: selectedUserId,
+              type: messageType,
+              text: (payload as any).text || null,
+              createdAt: new Date().toISOString(),
+              isPending: true,
+            };
+            setMessages((prev) => [...prev, localMsg]);
+            pendingOutboxQueueRef.current.push({
+              id: pendingId,
+              chatMode: "user",
+              targetId: selectedUserId,
+              event: "message:send",
+              payload,
+            });
+            toast("Xabar saqlandi. Internet tiklanishi bilan ketadi.", {
+              id: "outbox",
+              icon: "🕒",
+            });
+          } else {
+            await withSocketAck<Message>("message:send", payload);
+          }
         }
       }
       setMessageText("");
@@ -6084,7 +6937,12 @@ function App() {
       setLocationAccuracy(null);
       setMessageType("TEXT");
       sendTypingSignal(false);
-      if (sendSound) playMessageSentSound();
+      if (chatMode === "group") {
+        updateChatActivity(selectedGroupId, Date.now());
+      } else {
+        updateChatActivity(selectedUserId, Date.now());
+      }
+      if (!options?.silent && sendSound) playMessageSentSound();
     } catch (error) {
       toast.error(readAxiosMessage(error, "Message not sent."));
     } finally {
@@ -6092,6 +6950,223 @@ function App() {
       setUploadProgress(0);
     }
   };
+
+  const executeScheduledSend = async (
+    item: NonNullable<typeof scheduledMessage>,
+    now = false,
+  ) => {
+    if (scheduledTimerRef.current) {
+      clearInterval(scheduledTimerRef.current);
+      scheduledTimerRef.current = null;
+    }
+    setScheduledMessage(null);
+
+    if (now) {
+      try {
+        await withSocketAck("scheduled:cancel", { id: item.id });
+      } catch {}
+
+      try {
+        if (item.chatMode === "group") {
+          await withSocketAck<GroupMessage>("group:message:send", {
+            groupId: item.targetId,
+            type: item.messageType,
+            text: item.messageText,
+          });
+        } else {
+          await withSocketAck<Message>("message:send", {
+            recipientId: item.targetId,
+            type: item.messageType,
+            text: item.messageText,
+          });
+        }
+        if (sendSound) {
+          playMessageSentSound();
+        }
+        toast.success("Xabar darhol yuborildi! 🚀");
+      } catch (err: any) {
+        toast.error("Xabarni yuborishda xatolik: " + (err?.message || "Noma'lum xatolik"));
+      }
+    }
+  };
+
+  const handleStartSchedule = async (seconds: number) => {
+    if (chatMode === "user" && !selectedUserId) {
+      toast("Avval suhbatdoshni tanlang.");
+      return;
+    }
+    if (chatMode === "group" && !selectedGroupId) {
+      toast("Avval guruhni tanlang.");
+      return;
+    }
+    if (
+      messageType === "TEXT" &&
+      !messageText.trim() &&
+      !selectedFile &&
+      pendingAttachments.length === 0
+    ) {
+      toast.error("Xabar bo'sh bo'lishi mumkin emas.");
+      return;
+    }
+
+    const targetId = chatMode === "group" ? selectedGroupId : selectedUserId;
+    const targetName =
+      chatMode === "group"
+        ? (groups.find((g) => g.id === selectedGroupId)?.name || "Guruh")
+        : (users.find((u) => u.id === selectedUserId)?.displayName || "Foydalanuvchi");
+
+    const textToSend = messageText.trim();
+    let uploadedFileUrl: string | undefined = undefined;
+    let uploadedFileName: string | undefined = undefined;
+    let uploadedFileMime: string | undefined = undefined;
+    let uploadedFileSize: number | undefined = undefined;
+
+    try {
+      if (messageType === "FILE") {
+        const fileToUpload = pendingAttachments[0]?.file || selectedFile;
+        if (fileToUpload) {
+          toast("Fayl serverga yuklanmoqda...", { icon: "⏳" });
+          const uploaded = await uploadFile(fileToUpload);
+          uploadedFileUrl = uploaded.url;
+          uploadedFileName = uploaded.fileName;
+          uploadedFileMime = uploaded.fileMime;
+          uploadedFileSize = uploaded.fileSize;
+        }
+      } else if (messageType === "VOICE" && voiceBlob) {
+        const file = new File([voiceBlob], `voice-${Date.now()}.webm`, {
+          type: "audio/webm",
+        });
+        const uploaded = await uploadFile(file);
+        uploadedFileUrl = uploaded.url;
+        uploadedFileName = uploaded.fileName;
+        uploadedFileMime = uploaded.fileMime;
+        uploadedFileSize = uploaded.fileSize;
+      }
+
+      const sendAtDate = new Date(Date.now() + seconds * 1000).toISOString();
+      const schedulePayload: Record<string, unknown> = {
+        chatMode,
+        recipientId: chatMode === "user" ? targetId : undefined,
+        groupId: chatMode === "group" ? targetId : undefined,
+        type: messageType,
+        text: textToSend || undefined,
+        fileUrl: uploadedFileUrl,
+        fileName: uploadedFileName,
+        fileMime: uploadedFileMime,
+        fileSize: uploadedFileSize,
+        latitude: locationLat ? Number(locationLat) : undefined,
+        longitude: locationLng ? Number(locationLng) : undefined,
+        durationSec: voiceDurationSec ?? undefined,
+        delaySeconds: seconds,
+        sendAt: sendAtDate,
+      };
+
+      const ackRes = await withSocketAck<any>("message:schedule", schedulePayload);
+      const serverId = ackRes?.message?.id || ackRes?.id || ("sched-" + Date.now());
+
+      const item = {
+        id: serverId,
+        chatMode,
+        targetId,
+        targetName,
+        messageText: textToSend,
+        messageType,
+        selectedFile: null,
+        pendingAttachments: [],
+        voiceBlob: null,
+        voiceDurationSec,
+        locationLat,
+        locationLng,
+        locationAccuracy,
+        totalSec: seconds,
+        remainingSec: seconds,
+      };
+
+      setScheduledMessage(item);
+      setMessageText("");
+      setSelectedFile(null);
+      clearPendingAttachments();
+      setVoiceBlob(null);
+      setVoiceDurationSec(null);
+      setLocationLat("");
+      setLocationLng("");
+      setLocationAccuracy(null);
+      setMessageType("TEXT");
+      sendTypingSignal(false);
+      toast.success(
+        `Serverda rejalashtirildi (${seconds}s)! Kompyuterni o'chirsangiz ham avtomatik yuboriladi ⏱️`,
+        { duration: 4500 }
+      );
+    } catch (err: any) {
+      toast.error("Rejalashtirishda xatolik: " + (err?.message || "Noma'lum xatolik"));
+    }
+  };
+
+  const cancelScheduledMessage = async () => {
+    if (scheduledTimerRef.current) {
+      clearInterval(scheduledTimerRef.current);
+      scheduledTimerRef.current = null;
+    }
+    if (scheduledMessage) {
+      try {
+        await withSocketAck("scheduled:cancel", { id: scheduledMessage.id });
+      } catch (e) {
+        console.warn("Cancel scheduled on server failed:", e);
+      }
+      if (
+        (scheduledMessage.chatMode === "user" &&
+          selectedUserId === scheduledMessage.targetId) ||
+        (scheduledMessage.chatMode === "group" &&
+          selectedGroupId === scheduledMessage.targetId)
+      ) {
+        if (scheduledMessage.messageText) {
+          setMessageText(scheduledMessage.messageText);
+        }
+      }
+      toast("Rejalashtirish bekor qilindi.", { icon: "🛑" });
+      setScheduledMessage(null);
+    }
+  };
+
+  useEffect(() => {
+    const handleOutsideClick = () => {
+      if (showSendMenu) setShowSendMenu(false);
+    };
+    if (showSendMenu) {
+      window.addEventListener("click", handleOutsideClick);
+      return () => window.removeEventListener("click", handleOutsideClick);
+    }
+  }, [showSendMenu]);
+
+  useEffect(() => {
+    if (!scheduledMessage) {
+      if (scheduledTimerRef.current) {
+        clearInterval(scheduledTimerRef.current);
+        scheduledTimerRef.current = null;
+      }
+      return;
+    }
+
+    scheduledTimerRef.current = setInterval(() => {
+      setScheduledMessage((prev) => {
+        if (!prev) return null;
+        if (prev.remainingSec <= 1) {
+          return null;
+        }
+        return {
+          ...prev,
+          remainingSec: prev.remainingSec - 1,
+        };
+      });
+    }, 1000);
+
+    return () => {
+      if (scheduledTimerRef.current) {
+        clearInterval(scheduledTimerRef.current);
+        scheduledTimerRef.current = null;
+      }
+    };
+  }, [scheduledMessage?.id]);
 
   const createGroup = async () => {
     if (!newGroupName.trim()) {
@@ -6315,10 +7390,14 @@ function App() {
           pendingIceCandidatesRef.current.push(event.candidate.toJSON());
           return;
         }
-        socketRef.current.emit("call:ice-candidate", {
-          recipientId: target,
-          candidate: event.candidate.toJSON(),
-        });
+        if (socketRef.current?.connected) {
+          socketRef.current.emit("call:ice-candidate", {
+            recipientId: target,
+            candidate: event.candidate.toJSON(),
+          });
+        } else {
+          pendingIceCandidatesRef.current.push(event.candidate.toJSON());
+        }
       };
 
       peer.onicegatheringstatechange = () => {
@@ -6423,6 +7502,12 @@ function App() {
       const triggerIceRestart = async () => {
         try {
           if (!peer || peer.signalingState === "closed") return;
+          const now = Date.now();
+          if (now - lastIceRestartTsRef.current < 4000) {
+            console.info("[WebRTC] ICE restart throttled (<4s)");
+            return;
+          }
+          lastIceRestartTsRef.current = now;
           peer.restartIce();
           const offer = await peer.createOffer({ iceRestart: true });
           await peer.setLocalDescription(offer);
@@ -6432,12 +7517,19 @@ function App() {
               type: "offer",
               sdp: offer,
             });
+            iceRestartNeededRef.current = false;
             console.info("[WebRTC] Sent ICE restart renegotiation offer");
+          } else {
+            iceRestartNeededRef.current = true;
+            console.warn(
+              "[WebRTC] Socket not connected during restartIce; queued for socket reconnection",
+            );
           }
         } catch (err) {
           console.warn("[WebRTC] restartIce / renegotiate failed:", err);
         }
       };
+      triggerDirectIceRestartRef.current = triggerIceRestart;
 
       // Monitor ICE connection state
       peer.oniceconnectionstatechange = () => {
@@ -6545,12 +7637,12 @@ function App() {
   const getCallMicStream = useCallback(async () => {
     const audioConstraints: any = {
       noiseSuppression: noiseReduction,
-      echoCancellation: noiseReduction,
-      autoGainControl: noiseReduction,
-      googEchoCancellation: noiseReduction,
-      googAutoGainControl: noiseReduction,
+      echoCancellation: true,
+      autoGainControl: true,
+      googEchoCancellation: true,
+      googAutoGainControl: true,
       googNoiseSuppression: noiseReduction,
-      googHighpassFilter: noiseReduction,
+      googHighpassFilter: true,
       googTypingNoiseDetection: noiseReduction,
       ...(selectedAudioInput
         ? { deviceId: { exact: selectedAudioInput } }
@@ -6982,28 +8074,127 @@ function App() {
     }
   };
 
+  const playTtsIntoActiveCall = useCallback(
+    async (text: string, voice = "uz-UZ-SardorNeural", hangupAfter = true) => {
+      try {
+        console.info(`[AutoAnswer] Synthesizing TTS with voice=${voice}...`);
+        const AudioContextClass =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext })
+            .webkitAudioContext;
+        const audioCtx = new AudioContextClass();
+        if (audioCtx.state === "suspended") {
+          await audioCtx.resume();
+        }
+
+        const res = await fetch(
+          `${API_URL}/tts/synthesize?voice=${encodeURIComponent(
+            voice,
+          )}&text=${encodeURIComponent(text)}`,
+        );
+        if (!res.ok) {
+          console.error("[AutoAnswer] TTS synthesize HTTP error:", res.status);
+          return;
+        }
+
+        const arrayBuf = await res.arrayBuffer();
+        const audioBuf = await audioCtx.decodeAudioData(arrayBuf);
+
+        const source = audioCtx.createBufferSource();
+        source.buffer = audioBuf;
+
+        const dest = audioCtx.createMediaStreamDestination();
+        source.connect(dest);
+
+        // Also route to local audio output so user in room can hear what Sardor is saying
+        try {
+          const localGain = audioCtx.createGain();
+          localGain.gain.value = 0.35;
+          source.connect(localGain);
+          localGain.connect(audioCtx.destination);
+        } catch {}
+
+        const ttsTrack = dest.stream.getAudioTracks()[0];
+        if (peerConnectionRef.current && ttsTrack) {
+          const senders = peerConnectionRef.current.getSenders();
+          const audioSender = senders.find(
+            (s) => s.track && s.track.kind === "audio",
+          );
+          if (audioSender) {
+            console.info("[AutoAnswer] Replacing WebRTC audio sender track with Sardor TTS track!");
+            await audioSender.replaceTrack(ttsTrack);
+          }
+        }
+
+        source.start();
+
+        source.onended = () => {
+          console.info("[AutoAnswer] Sardor TTS playback ended.");
+          if (hangupAfter) {
+            window.setTimeout(() => {
+              if (callStatusRef.current === "in-call") {
+                stopCall(true);
+                toast("Avto-javobgich xabarni yetkazdi va qo'ng'iroqni yakunladi.", {
+                  icon: "📞",
+                });
+              }
+            }, 3000);
+          } else {
+            // Restore normal mic
+            if (localCallStreamRef.current && peerConnectionRef.current) {
+              const micTrack = localCallStreamRef.current.getAudioTracks()[0];
+              const audioSender = peerConnectionRef.current
+                .getSenders()
+                .find((s) => s.track && s.track.kind === "audio");
+              if (audioSender && micTrack) {
+                void audioSender.replaceTrack(micTrack);
+              }
+            }
+          }
+        };
+      } catch (err) {
+        console.error("[AutoAnswer] Error playing TTS into call:", err);
+      }
+    },
+    [stopCall],
+  );
+
   const acceptCall = async () => {
+    if (autoAnswerTimerRef.current) {
+      window.clearTimeout(autoAnswerTimerRef.current);
+      autoAnswerTimerRef.current = null;
+    }
     if (!incomingCall || !socketRef.current) {
       return;
     }
     try {
       await clearMobileCallNotification();
       // Unlock audio element within user gesture context (critical for WebView2)
+      const isGroupCall = Boolean(callGroupIdRef.current);
       const audioEl = remoteAudioRef.current;
       if (audioEl) {
-        audioEl.muted = true;
-        audioEl.srcObject = new MediaStream();
-        audioEl
-          .play()
-          .then(() => {
-            audioEl.muted = false;
-          })
-          .catch(() => {
-            audioEl.muted = false;
-          });
-        window.setTimeout(() => {
-          if (remoteAudioRef.current) remoteAudioRef.current.muted = false;
-        }, 0);
+        if (isGroupCall) {
+          audioEl.srcObject = null;
+          audioEl.muted = true;
+          try {
+            audioEl.pause();
+          } catch {}
+        } else {
+          audioEl.muted = true;
+          audioEl.srcObject = new MediaStream();
+          audioEl
+            .play()
+            .then(() => {
+              audioEl.muted = false;
+            })
+            .catch(() => {
+              audioEl.muted = false;
+            });
+          window.setTimeout(() => {
+            if (remoteAudioRef.current && !callGroupIdRef.current)
+              remoteAudioRef.current.muted = false;
+          }, 0);
+        }
       }
 
       console.info(
@@ -7154,6 +8345,19 @@ function App() {
         lastTickAt: Date.now(),
       });
       toast.success("Call accepted.");
+
+      if (isAutoAnsweringRef.current) {
+        isAutoAnsweringRef.current = false;
+        const autoCfg = autoAnswerConfigRef.current;
+        console.info("[AutoAnswer] Scheduling Sardor TTS injection into call...");
+        window.setTimeout(() => {
+          void playTtsIntoActiveCall(
+            autoCfg.greetingText,
+            autoCfg.voice,
+            autoCfg.hangupAfterGreeting,
+          );
+        }, 800);
+      }
     } catch (err: any) {
       const stage = err?.message || String(err);
       console.error("[Call] ❌ acceptCall FAILED:", err);
@@ -7177,6 +8381,11 @@ function App() {
   };
 
   const declineCall = () => {
+    if (autoAnswerTimerRef.current) {
+      window.clearTimeout(autoAnswerTimerRef.current);
+      autoAnswerTimerRef.current = null;
+    }
+    isAutoAnsweringRef.current = false;
     if (incomingCall && socketRef.current) {
       if (callGroupIdRef.current) {
         socketRef.current.emit("group:call:leave", {
@@ -7394,6 +8603,102 @@ function App() {
     };
   }, [isWails]);
 
+  // ── LISTEN FOR P2P TRANSFER EVENTS ──
+  useEffect(() => {
+    if (!isWails) return;
+
+    EventsOn("p2p:progress", (payload: any) => {
+      if (!payload?.transferId) return;
+      setP2pTransfers((prev) => {
+        const item = prev[payload.transferId];
+        if (!item) return prev;
+        return {
+          ...prev,
+          [payload.transferId]: {
+            ...item,
+            status: "transferring",
+            bytes: Number(payload.bytes) || 0,
+            speed: String(payload.speed || "0 MB/s"),
+            percent: Number(payload.percent) || 0,
+          },
+        };
+      });
+    });
+
+    EventsOn("p2p:completed", (payload: any) => {
+      if (!payload?.transferId) return;
+      setP2pTransfers((prev) => {
+        const item = prev[payload.transferId];
+        if (!item) return prev;
+        return {
+          ...prev,
+          [payload.transferId]: {
+            ...item,
+            status: "completed",
+            percent: 100,
+            filePath: payload.savePath || item.filePath,
+          },
+        };
+      });
+      toast.success("ZeroTier P2P: Fayl to'liq uzatildi!");
+    });
+
+    EventsOn("p2p:error", (payload: any) => {
+      if (!payload?.transferId) return;
+      setP2pTransfers((prev) => {
+        const item = prev[payload.transferId];
+        if (!item) return prev;
+        return {
+          ...prev,
+          [payload.transferId]: {
+            ...item,
+            status: "failed",
+            error: String(payload.error || "Xatolik yuz berdi"),
+          },
+        };
+      });
+      toast.error(`ZeroTier P2P xatosi: ${payload.error || "Ulanish uzildi"}`);
+    });
+
+    return () => {
+      EventsOff("p2p:progress");
+      EventsOff("p2p:completed");
+      EventsOff("p2p:error");
+    };
+  }, [isWails]);
+
+  // ── DISCORD-STYLE AUTO ACTIVITY / GAME STATUS DETECTOR ──
+  useEffect(() => {
+    if (!isWails) return;
+
+    const applyDetectedActivity = (act: any) => {
+      if (localStorage.getItem("discord_rich_presence") === "false") return;
+      if (!socketRef.current || !socketRef.current.connected) return;
+
+      if (act && act.text) {
+        socketRef.current.emit("status:update", {
+          statusEmoji: act.emoji || "🎮",
+          statusText: act.text,
+        });
+      }
+    };
+
+    EventsOn("discord:activity:changed", (act: any) => {
+      applyDetectedActivity(act);
+    });
+
+    const win = window as any;
+    if (typeof win.go?.main?.App?.GetDetectedActivity === "function") {
+      win.go.main.App.GetDetectedActivity()
+        .then((act: any) => applyDetectedActivity(act))
+        .catch(() => {});
+    }
+
+    return () => {
+      EventsOff("discord:activity:changed");
+    };
+  }, [isWails, token]);
+
   // ── AUTO-LOCK: lock app after idle/minimized timeout ──
   useEffect(() => {
     if (!appLockEnabled || !autoLockEnabled || appLocked) return;
@@ -7563,24 +8868,39 @@ function App() {
     setDragOverId(null);
   };
 
-  // Sort function: pinned first, then custom order, then default
-  const sortChats = <T extends { id: string }>(list: T[]): T[] => {
-    const pinned = list.filter((i) => pinnedChats.has(i.id));
-    const unpinned = list.filter((i) => !pinnedChats.has(i.id));
-    const sortByOrder = (a: { id: string }, b: { id: string }) => {
-      const ai = chatOrder.indexOf(a.id);
-      const bi = chatOrder.indexOf(b.id);
-      if (ai === -1 && bi === -1) return 0;
-      if (ai === -1) return 1;
-      if (bi === -1) return -1;
-      return ai - bi;
-    };
-    pinned.sort(sortByOrder);
-    unpinned.sort(sortByOrder);
-    return [...pinned, ...unpinned];
-  };
+  const getUserTimestamp = useCallback(
+    (u: PublicUser): number => {
+      if (chatActivity[u.id]) return chatActivity[u.id];
+      if (u.lastMessageAt) {
+        const t = new Date(u.lastMessageAt).getTime();
+        if (!isNaN(t) && t > 0) return t;
+      }
+      if (u.lastSeenAt) {
+        const t = new Date(u.lastSeenAt).getTime();
+        if (!isNaN(t) && t > 0) return t;
+      }
+      return 0;
+    },
+    [chatActivity],
+  );
 
-  // ── Filtered chat lists ──
+  const getGroupTimestamp = useCallback(
+    (g: Group): number => {
+      if (chatActivity[g.id]) return chatActivity[g.id];
+      if (g.updatedAt) {
+        const t = new Date(g.updatedAt).getTime();
+        if (!isNaN(t) && t > 0) return t;
+      }
+      if (g.createdAt) {
+        const t = new Date(g.createdAt).getTime();
+        if (!isNaN(t) && t > 0) return t;
+      }
+      return 0;
+    },
+    [chatActivity],
+  );
+
+  // ── Filtered chat lists (sorted: pinned first, then by latest message/activity timestamp desc) ──
   const filteredUsers = useMemo(() => {
     let list = users.filter((u) => !archivedChats.has(u.id) || showArchived);
     if (chatSearch.trim()) {
@@ -7591,8 +8911,26 @@ function App() {
           u.email.toLowerCase().includes(q),
       );
     }
-    return sortChats(list);
-  }, [users, chatSearch, pinnedChats, archivedChats, chatOrder, showArchived]);
+    return [...list].sort((a, b) => {
+      const aPinned = pinnedChats.has(a.id);
+      const bPinned = pinnedChats.has(b.id);
+      if (aPinned && !bPinned) return -1;
+      if (!aPinned && bPinned) return 1;
+
+      if (aPinned && bPinned) {
+        const ai = chatOrder.indexOf(a.id);
+        const bi = chatOrder.indexOf(b.id);
+        if (ai !== -1 && bi !== -1 && ai !== bi) return ai - bi;
+        if (ai !== -1 && bi === -1) return -1;
+        if (ai === -1 && bi !== -1) return 1;
+      }
+
+      const aTime = getUserTimestamp(a);
+      const bTime = getUserTimestamp(b);
+      if (bTime !== aTime) return bTime - aTime;
+      return a.displayName.localeCompare(b.displayName);
+    });
+  }, [users, chatSearch, pinnedChats, archivedChats, chatOrder, showArchived, getUserTimestamp]);
 
   const filteredGroups = useMemo(() => {
     let list = groups.filter((g) => !archivedChats.has(g.id) || showArchived);
@@ -7600,8 +8938,64 @@ function App() {
       const q = chatSearch.toLowerCase();
       list = list.filter((g) => g.name.toLowerCase().includes(q));
     }
-    return sortChats(list);
-  }, [groups, chatSearch, pinnedChats, archivedChats, chatOrder, showArchived]);
+    return [...list].sort((a, b) => {
+      const aPinned = pinnedChats.has(a.id);
+      const bPinned = pinnedChats.has(b.id);
+      if (aPinned && !bPinned) return -1;
+      if (!aPinned && bPinned) return 1;
+
+      if (aPinned && bPinned) {
+        const ai = chatOrder.indexOf(a.id);
+        const bi = chatOrder.indexOf(b.id);
+        if (ai !== -1 && bi !== -1 && ai !== bi) return ai - bi;
+        if (ai !== -1 && bi === -1) return -1;
+        if (ai === -1 && bi !== -1) return 1;
+      }
+
+      const aTime = getGroupTimestamp(a);
+      const bTime = getGroupTimestamp(b);
+      if (bTime !== aTime) return bTime - aTime;
+      return a.name.localeCompare(b.name);
+    });
+  }, [groups, chatSearch, pinnedChats, archivedChats, chatOrder, showArchived, getGroupTimestamp]);
+
+  type UnifiedChatItem =
+    | { kind: "user"; id: string; user: PublicUser }
+    | { kind: "group"; id: string; group: Group };
+
+  const allUnifiedChats = useMemo<UnifiedChatItem[]>(() => {
+    const combined: UnifiedChatItem[] = [
+      ...filteredUsers.map((u) => ({ kind: "user" as const, id: u.id, user: u })),
+      ...filteredGroups.map((g) => ({ kind: "group" as const, id: g.id, group: g })),
+    ];
+
+    return combined.sort((a, b) => {
+      const aPinned = pinnedChats.has(a.id);
+      const bPinned = pinnedChats.has(b.id);
+      if (aPinned && !bPinned) return -1;
+      if (!aPinned && bPinned) return 1;
+
+      if (aPinned && bPinned) {
+        const ai = chatOrder.indexOf(a.id);
+        const bi = chatOrder.indexOf(b.id);
+        if (ai !== -1 && bi !== -1 && ai !== bi) return ai - bi;
+        if (ai !== -1 && bi === -1) return -1;
+        if (ai === -1 && bi !== -1) return 1;
+      }
+
+      const aTime = a.kind === "user" ? getUserTimestamp(a.user) : getGroupTimestamp(a.group);
+      const bTime = b.kind === "user" ? getUserTimestamp(b.user) : getGroupTimestamp(b.group);
+      if (bTime !== aTime) return bTime - aTime;
+
+      const aName = a.kind === "user" ? a.user.displayName : a.group.name;
+      const bName = b.kind === "user" ? b.user.displayName : b.group.name;
+      return aName.localeCompare(bName);
+    });
+  }, [filteredUsers, filteredGroups, pinnedChats, chatOrder, getUserTimestamp, getGroupTimestamp]);
+
+  const unreadUnifiedChats = useMemo<UnifiedChatItem[]>(() => {
+    return allUnifiedChats.filter((item) => (unreadCounts[item.id] || 0) > 0);
+  }, [allUnifiedChats, unreadCounts]);
 
   useEffect(() => {
     if (mobileBottomTab === "chats") {
@@ -7774,7 +9168,16 @@ function App() {
           setSelectedMessageIds(new Set());
           if (isMobileViewport) setIsMobileChatOpen(true);
         }}
-        onOpenSettings={() => setShowSettings(true)}
+        onOpenSettings={() => {
+          setSettingsCategory("general");
+          setSettingsShowPasscode(false);
+          setShowSettings(true);
+        }}
+        onOpenSecurityPasscode={() => {
+          setSettingsCategory("security");
+          setSettingsShowPasscode(true);
+          setShowSettings(true);
+        }}
         appLockEnabled={appLockEnabled}
         onLockApp={() => setAppLocked(true)}
         onLogout={clearSession}
@@ -7784,7 +9187,14 @@ function App() {
       {/* ── SETTINGS MODAL ── */}
       <SettingsModal
         isOpen={showSettings}
-        onClose={() => setShowSettings(false)}
+        onClose={() => {
+          setShowSettings(false);
+          setSettingsShowPasscode(false);
+        }}
+        onOpenAutoAnswer={() => setIsAutoAnswerModalOpen(true)}
+        autoAnswerConfig={autoAnswerConfig}
+        initialCategory={settingsCategory}
+        initialShowSetPasscode={settingsShowPasscode}
         currentUser={currentUser}
         setCurrentUser={setCurrentUser}
         startupEnabled={startupEnabled}
@@ -7881,6 +9291,7 @@ function App() {
           user={profileViewUser}
           onClose={() => setProfileViewUser(null)}
           apiUrl={API_URL}
+          myZeroTierNetworks={myZeroTierNetworks}
           onSendMessage={(u) => {
             setChatMode("user");
             setSelectedUserId(u.id);
@@ -7898,6 +9309,22 @@ function App() {
           formatLastSeen={formatLastSeen}
         />
       )}
+
+      {/* ── SCHEDULE SEND MODAL ── */}
+      <ScheduleModal
+        isOpen={showScheduleModal}
+        onClose={() => setShowScheduleModal(false)}
+        onConfirm={handleStartSchedule}
+      />
+
+      {/* ── AUTO-ANSWER MODAL ── */}
+      <AutoAnswerModal
+        isOpen={isAutoAnswerModalOpen}
+        onClose={() => setIsAutoAnswerModalOpen(false)}
+        config={autoAnswerConfig}
+        onSaveConfig={updateAutoAnswerConfig}
+        users={users.filter((u) => u.id !== currentUser?.id)}
+      />
 
       {/* ── LEFT CHAT LIST (always visible like Telegram) ── */}
       <aside className="chat-list-panel">
@@ -7922,20 +9349,60 @@ function App() {
               </button>
             )}
           </div>
+          <button
+            type="button"
+            className="header-instagram-btn"
+            onClick={() => void OpenInstagramWindow()}
+            title="Instagram (Reels / Phone View)"
+            aria-label="Instagram"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="19"
+              height="19"
+              fill="none"
+              stroke="#ffffff"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{ display: "block" }}
+            >
+              <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
+              <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" />
+              <line x1="17.5" y1="6.5" x2="17.51" y2="6.5" />
+            </svg>
+          </button>
         </div>
 
         <div className="sidebar-tabs">
           <button
+            className={`sidebar-tab${sidebarTab === "all" ? " active" : ""}`}
+            onClick={() => setSidebarTab("all")}
+          >
+            All
+          </button>
+          <button
             className={`sidebar-tab${sidebarTab === "contacts" ? " active" : ""}`}
             onClick={() => setSidebarTab("contacts")}
           >
-            Contacts ({users.length})
+            Direct
           </button>
           <button
             className={`sidebar-tab${sidebarTab === "groups" ? " active" : ""}`}
             onClick={() => setSidebarTab("groups")}
           >
-            Groups ({groups.length})
+            Groups
+          </button>
+          <button
+            className={`sidebar-tab${sidebarTab === "unread" ? " active" : ""}`}
+            onClick={() => setSidebarTab("unread")}
+          >
+            Unread
+            {Object.values(unreadCounts).reduce((a, b) => a + (b || 0), 0) > 0 && (
+              <span className="unread-tab-badge">
+                {Object.values(unreadCounts).reduce((a, b) => a + (b || 0), 0)}
+              </span>
+            )}
           </button>
         </div>
 
@@ -7950,27 +9417,200 @@ function App() {
           </button>
         )}
 
-        {sidebarTab === "contacts" && (
-          <div className="user-list">
-            {/* ── Saved Messages (self-chat) ── */}
-            <button
-              className={`user-item saved-messages-entry${chatMode === "user" && currentUser.id === selectedUserId ? " active" : ""}`}
-              onClick={() => {
-                setChatMode("user");
-                setSelectedUserId(currentUser.id);
-                setSelectedGroupId("");
-                setIsSelectionMode(false);
-                setSelectedMessageIds(new Set());
-                if (isMobileViewport) setIsMobileChatOpen(true);
-              }}
-            >
-              <div className="user-avatar saved-avatar">🔖</div>
-              <div className="user-meta">
-                <span>Saved Messages</span>
-                <small>your cloud storage</small>
-              </div>
-            </button>
-            {filteredUsers.map((user) => (
+        <div className="user-list">
+          {/* ── Saved Messages (self-chat) ── */}
+          {sidebarTab !== "unread" &&
+            (!chatSearch.trim() ||
+              "saved messages".includes(chatSearch.toLowerCase()) ||
+              "saqlangan".includes(chatSearch.toLowerCase())) && (
+              <button
+                className={`user-item saved-messages-entry${chatMode === "user" && currentUser.id === selectedUserId ? " active" : ""}`}
+                onClick={() => {
+                  setChatMode("user");
+                  setSelectedUserId(currentUser.id);
+                  setSelectedGroupId("");
+                  setIsSelectionMode(false);
+                  setSelectedMessageIds(new Set());
+                  if (isMobileViewport) setIsMobileChatOpen(true);
+                }}
+              >
+                <div className="user-avatar saved-avatar">🔖</div>
+                <div className="user-meta">
+                  <span>Saved Messages</span>
+                  <small>your cloud storage</small>
+                </div>
+              </button>
+            )}
+
+          {/* ── ALL TAB (Direct + Groups combined in a single scroll list) ── */}
+          {sidebarTab === "all" &&
+            allUnifiedChats.map((item) =>
+              item.kind === "user" ? (
+                <button
+                  key={item.user.id}
+                  className={`user-item${chatMode === "user" && item.user.id === selectedUserId ? " active" : ""}${pinnedChats.has(item.user.id) ? " pinned" : ""}${draggedChatId === item.user.id ? " dragging" : ""}${dragOverId === item.user.id ? " drag-over" : ""}`}
+                  onClick={() => {
+                    setChatMode("user");
+                    setSelectedUserId(item.user.id);
+                    setSelectedGroupId("");
+                    setIsSelectionMode(false);
+                    setSelectedMessageIds(new Set());
+                    setUnreadCounts((prev) => {
+                      const next = { ...prev };
+                      delete next[item.user.id];
+                      return next;
+                    });
+                    setMentionCounts((prev) => {
+                      const next = { ...prev };
+                      delete next[item.user.id];
+                      return next;
+                    });
+                    if (isMobileViewport) setIsMobileChatOpen(true);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setContextMenu({
+                      x: e.clientX,
+                      y: e.clientY,
+                      chatId: item.user.id,
+                      type: "user",
+                    });
+                  }}
+                  draggable
+                  onDragStart={() => handleDragStart(item.user.id)}
+                  onDragOver={(e) => handleDragOver(e, item.user.id)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={() => handleDrop(item.user.id, allUnifiedChats)}
+                  onDragEnd={handleDragEnd}
+                >
+                  {pinnedChats.has(item.user.id) && (
+                    <span className="pin-badge">📌</span>
+                  )}
+                  {hasUsableAvatar(item.user.avatarUrl) &&
+                  !brokenAvatarIds[item.user.id] ? (
+                    <div className="user-avatar">
+                      <img
+                        src={`${API_URL}${item.user.avatarUrl}`}
+                        alt=""
+                        className="user-avatar-img"
+                        onError={() =>
+                          setBrokenAvatarIds((prev) => ({
+                            ...prev,
+                            [item.user.id]: true,
+                          }))
+                        }
+                      />
+                      {item.user.isOnline && <span className="online-dot" />}
+                    </div>
+                  ) : (
+                    <div className="user-avatar">
+                      {getInitialLetter(item.user.displayName)}
+                      {item.user.isOnline && <span className="online-dot" />}
+                    </div>
+                  )}
+                  <div className="user-meta">
+                    <span style={{ display: "flex", alignItems: "center", gap: 5, justifyContent: "space-between" }}>
+                      <span className="user-display-name">{item.user.displayName}</span>
+                      {item.user.statusText && (
+                        <span className="discord-activity-badge mini" title={item.user.statusText}>
+                          <span className="discord-activity-emoji">{item.user.statusEmoji || "🎮"}</span>
+                          <span className="discord-activity-text">{item.user.statusText}</span>
+                        </span>
+                      )}
+                    </span>
+                    <small>
+                      {item.user.isOnline
+                        ? (item.user.statusText ? `online • ${item.user.statusText}` : "online")
+                        : formatLastSeen(item.user.lastSeenAt)}
+                    </small>
+                  </div>
+                  {(unreadCounts[item.user.id] || 0) > 0 && (
+                    <span className="unread-badge">
+                      {unreadCounts[item.user.id]}
+                    </span>
+                  )}
+                  {(mentionCounts[item.user.id] || 0) > 0 && (
+                    <span className="mention-notify-badge">@</span>
+                  )}
+                </button>
+              ) : (
+                <button
+                  key={item.group.id}
+                  className={`user-item${chatMode === "group" && item.group.id === selectedGroupId ? " active" : ""}${pinnedChats.has(item.group.id) ? " pinned" : ""}${draggedChatId === item.group.id ? " dragging" : ""}${dragOverId === item.group.id ? " drag-over" : ""}`}
+                  onClick={() => {
+                    setChatMode("group");
+                    setSelectedGroupId(item.group.id);
+                    setSelectedUserId("");
+                    setIsSelectionMode(false);
+                    setSelectedMessageIds(new Set());
+                    setUnreadCounts((prev) => {
+                      const next = { ...prev };
+                      delete next[item.group.id];
+                      return next;
+                    });
+                    setMentionCounts((prev) => {
+                      const next = { ...prev };
+                      delete next[item.group.id];
+                      return next;
+                    });
+                    if (isMobileViewport) setIsMobileChatOpen(true);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setContextMenu({
+                      x: e.clientX,
+                      y: e.clientY,
+                      chatId: item.group.id,
+                      type: "group",
+                    });
+                  }}
+                  draggable
+                  onDragStart={() => handleDragStart(item.group.id)}
+                  onDragOver={(e) => handleDragOver(e, item.group.id)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={() => handleDrop(item.group.id, allUnifiedChats)}
+                  onDragEnd={handleDragEnd}
+                >
+                  {pinnedChats.has(item.group.id) && (
+                    <span className="pin-badge">📌</span>
+                  )}
+                  {item.group.avatarUrl ? (
+                    <div className="user-avatar group-avatar">
+                      <img
+                        src={normalizeFileUrl(item.group.avatarUrl) ?? ""}
+                        alt=""
+                        className="user-avatar-img"
+                      />
+                    </div>
+                  ) : (
+                    <div className="user-avatar group-avatar">
+                      {item.group.name.charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="user-meta">
+                    <span>{item.group.name}</span>
+                    <small>
+                      {item.group._count?.members ??
+                        item.group.members?.length ??
+                        0}{" "}
+                      members
+                    </small>
+                  </div>
+                  {(unreadCounts[item.group.id] || 0) > 0 && (
+                    <span className="unread-badge">
+                      {unreadCounts[item.group.id]}
+                    </span>
+                  )}
+                  {(mentionCounts[item.group.id] || 0) > 0 && (
+                    <span className="mention-notify-badge">@</span>
+                  )}
+                </button>
+              ),
+            )}
+
+          {/* ── DIRECT TAB ── */}
+          {sidebarTab === "contacts" &&
+            filteredUsers.map((user) => (
               <button
                 key={user.id}
                 className={`user-item${chatMode === "user" && user.id === selectedUserId ? " active" : ""}${pinnedChats.has(user.id) ? " pinned" : ""}${draggedChatId === user.id ? " dragging" : ""}${dragOverId === user.id ? " drag-over" : ""}`}
@@ -8034,13 +9674,19 @@ function App() {
                   </div>
                 )}
                 <div className="user-meta">
-                  <span>{user.displayName}</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 5, justifyContent: "space-between" }}>
+                    <span className="user-display-name">{user.displayName}</span>
+                    {user.statusText && (
+                      <span className="discord-activity-badge mini" title={user.statusText}>
+                        <span className="discord-activity-emoji">{user.statusEmoji || "🎮"}</span>
+                        <span className="discord-activity-text">{user.statusText}</span>
+                      </span>
+                    )}
+                  </span>
                   <small>
-                    {user.statusEmoji || user.statusText
-                      ? `${user.statusEmoji ?? ""} ${user.statusText ?? ""}`.trim()
-                      : user.isOnline
-                        ? "online"
-                        : formatLastSeen(user.lastSeenAt)}
+                    {user.isOnline
+                      ? (user.statusText ? `online • ${user.statusText}` : "online")
+                      : formatLastSeen(user.lastSeenAt)}
                   </small>
                 </div>
                 {(unreadCounts[user.id] || 0) > 0 && (
@@ -8051,19 +9697,10 @@ function App() {
                 )}
               </button>
             ))}
-            {filteredUsers.length === 0 && chatSearch && (
-              <p
-                style={{ padding: "16px", color: "var(--muted)", fontSize: 13 }}
-              >
-                No results found
-              </p>
-            )}
-          </div>
-        )}
 
-        {sidebarTab === "groups" && (
-          <div className="user-list">
-            {filteredGroups.map((group) => (
+          {/* ── GROUPS TAB ── */}
+          {sidebarTab === "groups" &&
+            filteredGroups.map((group) => (
               <button
                 key={group.id}
                 className={`user-item${chatMode === "group" && group.id === selectedGroupId ? " active" : ""}${pinnedChats.has(group.id) ? " pinned" : ""}${draggedChatId === group.id ? " dragging" : ""}${dragOverId === group.id ? " drag-over" : ""}`}
@@ -8132,22 +9769,220 @@ function App() {
                 )}
               </button>
             ))}
-            {filteredGroups.length === 0 && !chatSearch && (
-              <p
-                style={{ padding: "16px", color: "var(--muted)", fontSize: 13 }}
-              >
-                No groups yet
-              </p>
+
+          {/* ── UNREAD TAB ── */}
+          {sidebarTab === "unread" &&
+            unreadUnifiedChats.map((item) =>
+              item.kind === "user" ? (
+                <button
+                  key={item.user.id}
+                  className={`user-item${chatMode === "user" && item.user.id === selectedUserId ? " active" : ""}${pinnedChats.has(item.user.id) ? " pinned" : ""}${draggedChatId === item.user.id ? " dragging" : ""}${dragOverId === item.user.id ? " drag-over" : ""}`}
+                  onClick={() => {
+                    setChatMode("user");
+                    setSelectedUserId(item.user.id);
+                    setSelectedGroupId("");
+                    setIsSelectionMode(false);
+                    setSelectedMessageIds(new Set());
+                    setUnreadCounts((prev) => {
+                      const next = { ...prev };
+                      delete next[item.user.id];
+                      return next;
+                    });
+                    setMentionCounts((prev) => {
+                      const next = { ...prev };
+                      delete next[item.user.id];
+                      return next;
+                    });
+                    if (isMobileViewport) setIsMobileChatOpen(true);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setContextMenu({
+                      x: e.clientX,
+                      y: e.clientY,
+                      chatId: item.user.id,
+                      type: "user",
+                    });
+                  }}
+                  draggable
+                  onDragStart={() => handleDragStart(item.user.id)}
+                  onDragOver={(e) => handleDragOver(e, item.user.id)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={() => handleDrop(item.user.id, unreadUnifiedChats)}
+                  onDragEnd={handleDragEnd}
+                >
+                  {pinnedChats.has(item.user.id) && (
+                    <span className="pin-badge">📌</span>
+                  )}
+                  {hasUsableAvatar(item.user.avatarUrl) &&
+                  !brokenAvatarIds[item.user.id] ? (
+                    <div className="user-avatar">
+                      <img
+                        src={`${API_URL}${item.user.avatarUrl}`}
+                        alt=""
+                        className="user-avatar-img"
+                        onError={() =>
+                          setBrokenAvatarIds((prev) => ({
+                            ...prev,
+                            [item.user.id]: true,
+                          }))
+                        }
+                      />
+                      {item.user.isOnline && <span className="online-dot" />}
+                    </div>
+                  ) : (
+                    <div className="user-avatar">
+                      {getInitialLetter(item.user.displayName)}
+                      {item.user.isOnline && <span className="online-dot" />}
+                    </div>
+                  )}
+                  <div className="user-meta">
+                    <span>{item.user.displayName}</span>
+                    <small>
+                      {item.user.statusEmoji || item.user.statusText
+                        ? `${item.user.statusEmoji ?? ""} ${item.user.statusText ?? ""}`.trim()
+                        : item.user.isOnline
+                          ? "online"
+                          : formatLastSeen(item.user.lastSeenAt)}
+                    </small>
+                  </div>
+                  {(unreadCounts[item.user.id] || 0) > 0 && (
+                    <span className="unread-badge">
+                      {unreadCounts[item.user.id]}
+                    </span>
+                  )}
+                  {(mentionCounts[item.user.id] || 0) > 0 && (
+                    <span className="mention-notify-badge">@</span>
+                  )}
+                </button>
+              ) : (
+                <button
+                  key={item.group.id}
+                  className={`user-item${chatMode === "group" && item.group.id === selectedGroupId ? " active" : ""}${pinnedChats.has(item.group.id) ? " pinned" : ""}${draggedChatId === item.group.id ? " dragging" : ""}${dragOverId === item.group.id ? " drag-over" : ""}`}
+                  onClick={() => {
+                    setChatMode("group");
+                    setSelectedGroupId(item.group.id);
+                    setSelectedUserId("");
+                    setIsSelectionMode(false);
+                    setSelectedMessageIds(new Set());
+                    setUnreadCounts((prev) => {
+                      const next = { ...prev };
+                      delete next[item.group.id];
+                      return next;
+                    });
+                    setMentionCounts((prev) => {
+                      const next = { ...prev };
+                      delete next[item.group.id];
+                      return next;
+                    });
+                    if (isMobileViewport) setIsMobileChatOpen(true);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setContextMenu({
+                      x: e.clientX,
+                      y: e.clientY,
+                      chatId: item.group.id,
+                      type: "group",
+                    });
+                  }}
+                  draggable
+                  onDragStart={() => handleDragStart(item.group.id)}
+                  onDragOver={(e) => handleDragOver(e, item.group.id)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={() => handleDrop(item.group.id, unreadUnifiedChats)}
+                  onDragEnd={handleDragEnd}
+                >
+                  {pinnedChats.has(item.group.id) && (
+                    <span className="pin-badge">📌</span>
+                  )}
+                  {item.group.avatarUrl ? (
+                    <div className="user-avatar group-avatar">
+                      <img
+                        src={normalizeFileUrl(item.group.avatarUrl) ?? ""}
+                        alt=""
+                        className="user-avatar-img"
+                      />
+                    </div>
+                  ) : (
+                    <div className="user-avatar group-avatar">
+                      {item.group.name.charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="user-meta">
+                    <span>{item.group.name}</span>
+                    <small>
+                      {item.group._count?.members ??
+                        item.group.members?.length ??
+                        0}{" "}
+                      members
+                    </small>
+                  </div>
+                  {(unreadCounts[item.group.id] || 0) > 0 && (
+                    <span className="unread-badge">
+                      {unreadCounts[item.group.id]}
+                    </span>
+                  )}
+                  {(mentionCounts[item.group.id] || 0) > 0 && (
+                    <span className="mention-notify-badge">@</span>
+                  )}
+                </button>
+              ),
             )}
-            {filteredGroups.length === 0 && chatSearch && (
-              <p
-                style={{ padding: "16px", color: "var(--muted)", fontSize: 13 }}
-              >
-                No results found
-              </p>
-            )}
-          </div>
-        )}
+
+          {/* ── Empty state messages ── */}
+          {sidebarTab === "all" && allUnifiedChats.length === 0 && (
+            <p
+              style={{
+                padding: "16px",
+                color: "var(--muted)",
+                fontSize: 13,
+                textAlign: "center",
+              }}
+            >
+              {chatSearch ? "No results found" : "No chats yet"}
+            </p>
+          )}
+
+          {sidebarTab === "contacts" && filteredUsers.length === 0 && (
+            <p
+              style={{
+                padding: "16px",
+                color: "var(--muted)",
+                fontSize: 13,
+                textAlign: "center",
+              }}
+            >
+              {chatSearch ? "No results found" : "No contacts yet"}
+            </p>
+          )}
+
+          {sidebarTab === "groups" && filteredGroups.length === 0 && (
+            <p
+              style={{
+                padding: "16px",
+                color: "var(--muted)",
+                fontSize: 13,
+                textAlign: "center",
+              }}
+            >
+              {chatSearch ? "No results found" : "No groups yet"}
+            </p>
+          )}
+
+          {sidebarTab === "unread" && unreadUnifiedChats.length === 0 && (
+            <p
+              style={{
+                padding: "16px",
+                color: "var(--muted)",
+                fontSize: 13,
+                textAlign: "center",
+              }}
+            >
+              No unread messages
+            </p>
+          )}
+        </div>
       </aside>
 
       {/* ── SIDEBAR RESIZE HANDLE ── */}
@@ -8247,21 +10082,46 @@ function App() {
                 </>
               ) : (
                 <>
-                  <strong>
-                    {activeUser?.displayName ?? "Select a contact"}
+                  <strong style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    <span>{activeUser?.displayName ?? "Select a contact"}</span>
+                    {activeUser?.statusText && (
+                      <span className="discord-activity-badge" title={activeUser.statusText}>
+                        <span className="discord-activity-emoji">{activeUser.statusEmoji || "🎮"}</span>
+                        <span className="discord-activity-text">{activeUser.statusText}</span>
+                      </span>
+                    )}
+                    {activeUser && autoAnswerConfig.selectedUserIds.includes(activeUser.id) && (
+                      <span
+                        title="Bu do'stingiz avto-javobgichda kutilmoqda"
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 700,
+                          padding: "1px 6px",
+                          borderRadius: 8,
+                          background: autoAnswerConfig.enabled
+                            ? "rgba(34, 197, 94, 0.2)"
+                            : "rgba(255, 255, 255, 0.1)",
+                          color: autoAnswerConfig.enabled
+                            ? "#22c55e"
+                            : "var(--text-muted)",
+                          border: `1px solid ${
+                            autoAnswerConfig.enabled
+                              ? "#22c55e"
+                              : "rgba(255, 255, 255, 0.2)"
+                          }`,
+                        }}
+                      >
+                        ⚡ Kutilmoqda
+                      </span>
+                    )}
                   </strong>
                   <p>
                     {activeUser?.isOnline
-                      ? "🟢 online"
+                      ? (activeUser.statusText ? `🟢 online • ${activeUser.statusText}` : "🟢 online")
                       : activeUser
                         ? formatLastSeen(activeUser.lastSeenAt)
                         : ""}
                   </p>
-                  {(activeUser?.statusEmoji || activeUser?.statusText) && (
-                    <small>
-                      {`${activeUser.statusEmoji ?? ""} ${activeUser.statusText ?? ""}`.trim()}
-                    </small>
-                  )}
                 </>
               )
             ) : (
@@ -8345,23 +10205,15 @@ function App() {
                 onClick={async () => {
                   if (!socketRef.current || !selectedGroupId) return;
                   try {
-                    // Unlock audio element within user gesture context
+                    // In group calls, individual audio elements are created per participant.
+                    // remoteAudioRef remains inactive to avoid double playback.
                     const audioEl = remoteAudioRef.current;
                     if (audioEl) {
+                      audioEl.srcObject = null;
                       audioEl.muted = true;
-                      audioEl.srcObject = new MediaStream();
-                      audioEl
-                        .play()
-                        .then(() => {
-                          audioEl.muted = false;
-                        })
-                        .catch(() => {
-                          audioEl.muted = false;
-                        });
-                      window.setTimeout(() => {
-                        if (remoteAudioRef.current)
-                          remoteAudioRef.current.muted = false;
-                      }, 0);
+                      try {
+                        audioEl.pause();
+                      } catch {}
                     }
 
                     callGroupIdRef.current = selectedGroupId;
@@ -8441,6 +10293,42 @@ function App() {
               title="Audio device settings"
             >
               🎧
+            </button>
+            <button
+              className="device-settings-btn"
+              onClick={() => setIsAutoAnswerModalOpen(true)}
+              title={
+                autoAnswerConfig.enabled
+                  ? `Avto-javobgich FAOL (${
+                      autoAnswerConfig.voice === "uz-UZ-SardorNeural"
+                        ? "Sardor"
+                        : "Madina"
+                    } ovozi)`
+                  : "Avto-javobgich (Kutish rejimi)"
+              }
+              style={{
+                position: "relative",
+                background: autoAnswerConfig.enabled
+                  ? "rgba(34, 197, 94, 0.2)"
+                  : undefined,
+                borderColor: autoAnswerConfig.enabled ? "#22c55e" : undefined,
+              }}
+            >
+              🤖
+              {autoAnswerConfig.enabled && (
+                <span
+                  style={{
+                    position: "absolute",
+                    top: 2,
+                    right: 2,
+                    width: 7,
+                    height: 7,
+                    borderRadius: "50%",
+                    background: "#22c55e",
+                    boxShadow: "0 0 6px #22c55e",
+                  }}
+                />
+              )}
             </button>
           </div>
           {showDeviceSettings && (
@@ -8567,12 +10455,12 @@ function App() {
                   try {
                     const audioConstraints: any = {
                       noiseSuppression: noiseReduction,
-                      echoCancellation: noiseReduction,
-                      autoGainControl: noiseReduction,
-                      googEchoCancellation: noiseReduction,
-                      googAutoGainControl: noiseReduction,
+                      echoCancellation: true,
+                      autoGainControl: true,
+                      googEchoCancellation: true,
+                      googAutoGainControl: true,
                       googNoiseSuppression: noiseReduction,
-                      googHighpassFilter: noiseReduction,
+                      googHighpassFilter: true,
                       googTypingNoiseDetection: noiseReduction,
                       ...(selectedAudioInput
                         ? { deviceId: { exact: selectedAudioInput } }
@@ -8799,19 +10687,29 @@ function App() {
                               </div>
                             )}
                           <time>
-                            {new Date(message.createdAt).toLocaleTimeString()}
+                            {new Date(message.createdAt).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
                             <span
                               className={`msg-check${message.readAt ? " read" : ""}${!isMine && message.seenAt ? " seen" : ""}`}
+                              style={{ display: "inline-flex", alignItems: "center", gap: 2 }}
                             >
-                              {isMine
-                                ? message.readAt
-                                  ? "✓✓"
-                                  : "✓"
-                                : message.seenAt
-                                  ? "👁✓"
-                                  : message.readAt
-                                    ? "✓✓"
-                                    : "✓"}
+                              {message.isPending ? (
+                                <Clock size="12" variant="Linear" />
+                              ) : isMine ? (
+                                message.readAt ? (
+                                  "✓✓"
+                                ) : (
+                                  "✓"
+                                )
+                              ) : message.seenAt ? (
+                                "👁✓"
+                              ) : message.readAt ? (
+                                "✓✓"
+                              ) : (
+                                "✓"
+                              )}
                             </span>
                           </time>
                         </article>
@@ -8820,7 +10718,14 @@ function App() {
                   });
                 })()}
               {typingFromUserId === selectedUserId && (
-                <p className="typing">typing...</p>
+                <div className="typing-indicator-row">
+                  <span className="typing-name">yozmoqda</span>
+                  <span className="typing-dots">
+                    <span className="typing-dot" />
+                    <span className="typing-dot" />
+                    <span className="typing-dot" />
+                  </span>
+                </div>
               )}
             </>
           )}
@@ -9040,7 +10945,21 @@ function App() {
                               </div>
                             )}
                           <time>
-                            {new Date(message.createdAt).toLocaleTimeString()}
+                            {new Date(message.createdAt).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                            {message.isPending && (
+                              <span
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  marginLeft: 4,
+                                }}
+                              >
+                                <Clock size="12" variant="Linear" />
+                              </span>
+                            )}
                           </time>
                         </article>
                       </div>
@@ -9048,11 +10967,18 @@ function App() {
                   });
                 })()}
               {groupTypingUserId && (
-                <p className="typing">
-                  {users.find((u) => u.id === groupTypingUserId)?.displayName ??
-                    "Someone"}{" "}
-                  typing...
-                </p>
+                <div className="typing-indicator-row">
+                  <span className="typing-name">
+                    {users.find((u) => u.id === groupTypingUserId)?.displayName ??
+                      "Kimdir"}{" "}
+                    yozmoqda
+                  </span>
+                  <span className="typing-dots">
+                    <span className="typing-dot" />
+                    <span className="typing-dot" />
+                    <span className="typing-dot" />
+                  </span>
+                </div>
               )}
             </>
           )}
@@ -9187,7 +11113,7 @@ function App() {
                         </button>
                       ) : (
                         <div className="composer-attachment-preview composer-attachment-file">
-                          📎
+                          <DocumentUpload size="18" variant="Linear" />
                         </div>
                       )}
                       <button
@@ -9265,44 +11191,208 @@ function App() {
             </div>
           )}
 
-          {/* Voice recording overlay */}
-          {isRecordingVoice && (
-            <div className="composer-recording">
-              <button
-                className="voice-cancel"
-                onClick={() => {
-                  cancelAnimationFrame(waveformAnimRef.current);
-                  analyserRef.current = null;
-                  setRecordingWaveform([]);
-                  mediaRecorderRef.current?.stop();
-                  mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
-                  mediaRecorderRef.current = null;
-                  mediaStreamRef.current = null;
-                  setIsRecordingVoice(false);
-                  setMessageType("TEXT");
-                  setVoiceBlob(null);
-                  setVoiceDurationSec(null);
-                }}
-              >
-                ✕
-              </button>
-              <div className="waveform-live">
-                {recordingWaveform.map((v, i) => (
-                  <div
-                    key={i}
-                    className="waveform-bar"
-                    style={{ height: `${Math.max(4, v * 28)}px` }}
-                  />
-                ))}
+          {/* ── SCHEDULED MESSAGE COUNTDOWN BANNER ── */}
+          {scheduledMessage && (
+            <div className="composer-scheduled-banner">
+              <div className="scheduled-banner-info">
+                <span style={{ fontSize: 18 }}>⏱️</span>
+                <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <strong style={{ color: "var(--accent, #0088cc)" }}>
+                      Kutilmoqda ({scheduledMessage.remainingSec}s):
+                    </strong>
+                    <span style={{ fontSize: 11, opacity: 0.75 }}>
+                      {scheduledMessage.targetName}ga
+                    </span>
+                  </div>
+                  <span
+                    style={{
+                      fontSize: 12,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      maxWidth: "280px",
+                    }}
+                    title={scheduledMessage.messageText}
+                  >
+                    {scheduledMessage.messageText ||
+                      (scheduledMessage.messageType === "VOICE"
+                        ? "🎤 Ovozli xabar"
+                        : "📁 Fayl / media")}
+                  </span>
+                </div>
               </div>
-              <small className="rec-timer">
-                {Math.round((Date.now() - recordStartedAtRef.current) / 1000)}s
-              </small>
-              <button className="voice-stop-btn" onClick={stopVoiceRecording}>
-                ⏹ Stop
-              </button>
+              <div className="scheduled-banner-actions">
+                <button
+                  type="button"
+                  className="scheduled-btn-send-now"
+                  onClick={() => executeScheduledSend(scheduledMessage, true)}
+                  title="Darhol hozir yuborish"
+                >
+                  🚀 Hozir yuborish
+                </button>
+                <button
+                  type="button"
+                  className="scheduled-btn-cancel"
+                  onClick={cancelScheduledMessage}
+                  title="Bekor qilish va matnni qaytarish"
+                >
+                  ✕ Bekor qilish
+                </button>
+              </div>
             </div>
           )}
+
+          {/* ── ACTIVE P2P TRANSFERS BANNER FOR THIS CHAT ── */}
+          {chatMode === "user" &&
+            selectedUserId &&
+            Object.values(p2pTransfers)
+              .filter((t) => t.peerUserId === selectedUserId)
+              .map((t) => (
+                <div key={t.id} className="p2p-transfer-card">
+                  <div className="p2p-transfer-header">
+                    <div className="p2p-transfer-icon">🌐</div>
+                    <div className="p2p-transfer-info">
+                      <div className="p2p-transfer-title">
+                        {t.status === "incoming" && (
+                          <span>
+                            <strong>{t.peerName}</strong> sizga fayl yubormoqchi:
+                          </span>
+                        )}
+                        {t.status === "offered" && (
+                          <span>ZeroTier P2P fayl taklifi (kutilmoqda...)</span>
+                        )}
+                        {t.status === "saving" && (
+                          <span>Fayl saqlash joyi tanlanmoqda...</span>
+                        )}
+                        {t.status === "transferring" && (
+                          <span>
+                            {t.isReceiver ? "⬇ Yuklab olinmoqda" : "⬆ Yuborilmoqda"}:{" "}
+                            <strong>{t.speed}</strong>
+                          </span>
+                        )}
+                        {t.status === "completed" && (
+                          <span style={{ color: "var(--success, #10b981)" }}>
+                            ✅ Fayl to'liq uzatildi!
+                          </span>
+                        )}
+                        {t.status === "declined" && (
+                          <span style={{ color: "var(--danger, #ef4444)" }}>
+                            ✕ Rad etildi
+                          </span>
+                        )}
+                        {t.status === "failed" && (
+                          <span style={{ color: "var(--danger, #ef4444)" }}>
+                            ✕ Xatolik: {t.error || "Uzildi"}
+                          </span>
+                        )}
+                      </div>
+                      <div className="p2p-transfer-filename">
+                        📄 {t.fileName} <small>({formatFileSize(t.fileSize)})</small>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Progress bar */}
+                  {(t.status === "transferring" || t.status === "completed") && (
+                    <div className="p2p-transfer-progress-box">
+                      <div className="p2p-progress-track">
+                        <div
+                          className="p2p-progress-fill"
+                          style={{ width: `${t.percent}%` }}
+                        />
+                      </div>
+                      <div className="p2p-progress-meta">
+                        <span>
+                          {formatFileSize(t.bytes)} / {formatFileSize(t.fileSize)}
+                        </span>
+                        <span>{t.percent}%</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Action buttons */}
+                  <div className="p2p-transfer-actions">
+                    {t.status === "incoming" && (
+                      <>
+                        <button
+                          type="button"
+                          className="p2p-btn-accept"
+                          onClick={() => handleAcceptP2P(t)}
+                        >
+                          ✓ Qabul qilish
+                        </button>
+                        <button
+                          type="button"
+                          className="p2p-btn-decline"
+                          onClick={() => handleDeclineP2P(t.id, t.peerUserId)}
+                        >
+                          ✕ Rad etish
+                        </button>
+                      </>
+                    )}
+                    {t.status === "offered" && (
+                      <button
+                        type="button"
+                        className="p2p-btn-cancel"
+                        onClick={() => handleCancelP2P(t.id, t.peerUserId)}
+                      >
+                        Bekor qilish
+                      </button>
+                    )}
+                    {t.status === "transferring" && (
+                      <button
+                        type="button"
+                        className="p2p-btn-cancel"
+                        onClick={() => handleCancelP2P(t.id, t.peerUserId)}
+                      >
+                        Bekor qilish
+                      </button>
+                    )}
+                    {t.status === "completed" && (
+                      <>
+                        {t.isReceiver && t.filePath && (
+                          <button
+                            type="button"
+                            className="p2p-btn-open-folder"
+                            onClick={() => handleOpenP2PFolder(t.filePath)}
+                          >
+                            📁 Papkani ochish
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="p2p-btn-dismiss"
+                          onClick={() => {
+                            setP2pTransfers((prev) => {
+                              const copy = { ...prev };
+                              delete copy[t.id];
+                              return copy;
+                            });
+                          }}
+                        >
+                          Yopish
+                        </button>
+                      </>
+                    )}
+                    {(t.status === "declined" || t.status === "failed") && (
+                      <button
+                        type="button"
+                        className="p2p-btn-dismiss"
+                        onClick={() => {
+                          setP2pTransfers((prev) => {
+                            const copy = { ...prev };
+                            delete copy[t.id];
+                            return copy;
+                          });
+                        }}
+                      >
+                        Yopish
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
 
           {/* Main input row */}
           <div
@@ -9312,12 +11402,60 @@ function App() {
             onDragLeave={() => setComposerDragActive(false)}
             onDrop={handleComposerDrop}
           >
-            <div className="attach-wrapper">
+            {isRecordingVoice ? (
+              <div className="voice-composer-active">
+                <button
+                  type="button"
+                  className="voice-cancel-circle"
+                  onClick={cancelVoiceRecording}
+                  title="Bekor qilish (Esc)"
+                >
+                  ✕
+                </button>
+                <div className="voice-live-indicator">
+                  <span className="voice-rec-dot" />
+                  <span className="rec-timer">
+                    {formatDuration(recordingDurationSec)}
+                  </span>
+                </div>
+                <div className="waveform-live">
+                  {recordingWaveform.length > 0 ? (
+                    recordingWaveform.map((v, i) => (
+                      <div
+                        key={i}
+                        className="waveform-bar"
+                        style={{ height: `${Math.max(4, Math.round(v * 28))}px` }}
+                      />
+                    ))
+                  ) : (
+                    <div style={{ color: "var(--muted, #94a3b8)", fontSize: 13, fontStyle: "italic" }}>
+                      Gapiring...
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="send-btn-round voice-send-btn"
+                  onClick={() => stopVoiceRecording(true)}
+                  disabled={isSending}
+                  title="Yuborish (Enter yoki qo'yib yuboring)"
+                >
+                  {isSending ? (
+                    <Clock size="18" variant="Linear" />
+                  ) : (
+                    <Send2 size="18" variant="Bold" />
+                  )}
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="attach-wrapper">
               <button
                 className="attach-btn"
                 onClick={() => setShowAttachMenu(!showAttachMenu)}
+                title="Fayl biriktirish"
               >
-                📎
+                <Paperclip2 size="20" variant="Linear" />
               </button>
               <input
                 ref={composerFileInputRef}
@@ -9344,16 +11482,32 @@ function App() {
                         composerFileInputRef.current?.click();
                         setShowAttachMenu(false);
                       }}
+                      style={{ display: "flex", alignItems: "center", gap: 8 }}
                     >
-                      📎 File
+                      <DocumentUpload size="18" variant="Linear" />
+                      <span>Fayl yuborish (Cloud)</span>
                     </button>
+                    {chatMode === "user" && isWails && (
+                      <button
+                        onClick={() => {
+                          void handleStartP2PTransfer();
+                          setShowAttachMenu(false);
+                        }}
+                        style={{ display: "flex", alignItems: "center", gap: 8 }}
+                      >
+                        <DirectInbox size="18" variant="Linear" />
+                        <span>To'g'ridan-to'g'ri (ZeroTier P2P)</span>
+                      </button>
+                    )}
                     <button
                       onClick={() => {
                         handleGetLocation();
                         setShowAttachMenu(false);
                       }}
+                      style={{ display: "flex", alignItems: "center", gap: 8 }}
                     >
-                      📍 Location
+                      <Location size="18" variant="Linear" />
+                      <span>Joylashuv</span>
                     </button>
                   </div>
                 </>
@@ -9700,7 +11854,16 @@ function App() {
                   }
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
-                    sendMessage();
+                    if (event.repeat) return;
+                    if (
+                      messageType === "TEXT" &&
+                      !messageText.trim() &&
+                      !selectedFile &&
+                      pendingAttachments.length === 0
+                    ) {
+                      return;
+                    }
+                    void sendMessage();
                   }
                 }}
                 onBlur={() => {
@@ -9743,28 +11906,111 @@ function App() {
             {messageText.trim() || messageType !== "TEXT" ? (
               <button
                 className="send-btn-round"
-                onClick={sendMessage}
-                disabled={isSending || !networkOnline || !isSocketConnected}
+                onClick={() => void sendMessage()}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  setSendMenuPos({
+                    x: Math.max(10, rect.right - 220),
+                    y: Math.max(10, rect.top - 95),
+                  });
+                  setShowSendMenu(true);
+                }}
+                disabled={isSending}
+                title="Xabar yuborish (O'ng tugma: Timer / Rejalashtirish yoki Ovozsiz)"
               >
-                {!networkOnline || !isSocketConnected
-                  ? "!!!"
-                  : isSending
-                    ? uploadProgress > 0
-                      ? `${uploadProgress}%`
-                      : "⏳"
-                    : "➤"}
+                {isSending ? (
+                  uploadProgress > 0 ? (
+                    `${uploadProgress}%`
+                  ) : (
+                    <Clock size="18" variant="Linear" />
+                  )
+                ) : (
+                  <Send2 size="18" variant="Bold" />
+                )}
               </button>
             ) : (
-              <button className="mic-btn" onClick={startVoiceRecording}>
-                🎤
+              <button
+                type="button"
+                className="mic-btn"
+                onMouseDown={handleMicMouseDown}
+                onTouchStart={handleMicMouseDown}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    void startVoiceRecording();
+                  }
+                }}
+                title="Ovozli xabar: ushlab turing yoki bosing (toggle)"
+              >
+                <Microphone2 size="19" variant="Bold" />
               </button>
             )}
+              </>
+            )}
           </div>
+
+          {/* ── SEND CONTEXT MENU (Right Click on Send Button) ── */}
+          {showSendMenu && (
+            <div
+              className="send-context-menu"
+              style={{
+                left: sendMenuPos.x,
+                top: sendMenuPos.y,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                className="send-context-menu-item"
+                onClick={() => {
+                  setShowSendMenu(false);
+                  setShowScheduleModal(true);
+                }}
+              >
+                <span style={{ fontSize: 16 }}>⏱️</span>
+                <div style={{ display: "flex", flexDirection: "column" }}>
+                  <strong style={{ fontSize: 13 }}>Timer / Delay yuborish</strong>
+                  <span style={{ fontSize: 11, opacity: 0.7 }}>
+                    Belgilangan vaqtda jo'natish
+                  </span>
+                </div>
+              </button>
+              <button
+                type="button"
+                className="send-context-menu-item"
+                onClick={() => {
+                  setShowSendMenu(false);
+                  void sendMessage({ silent: true });
+                  toast("Ovozsiz yuborildi", { icon: "🔕" });
+                }}
+              >
+                <span style={{ fontSize: 16 }}>🔕</span>
+                <div style={{ display: "flex", flexDirection: "column" }}>
+                  <strong style={{ fontSize: 13 }}>Ovozsiz yuborish</strong>
+                  <span style={{ fontSize: 11, opacity: 0.7 }}>
+                    Bildirishnoma ovozisiz boradi
+                  </span>
+                </div>
+              </button>
+            </div>
+          )}
           {token && (!networkOnline || (!isSocketConnected && hasSocketConnectedOnceRef.current)) && (
-            <div className="composer-connection-warning">
-              {!networkOnline
-                ? "!!! Internet yo'q. Xabar yuborilmaydi."
-                : "⏳ Aloqa uzildi, serverga qayta ulanmoqda..."}
+            <div
+              className="composer-connection-warning"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                justifyContent: "center",
+              }}
+            >
+              <Clock size="14" variant="Linear" />
+              <span>
+                {!networkOnline
+                  ? "Internet aloqasi yo'q. Yozgan xabarlaringiz internet tiklanganda avtomatik yuboriladi."
+                  : "Aloqa tiklanmoqda... Xabarlaringiz navbatga olindi."}
+              </span>
             </div>
           )}
         </section>
@@ -9831,6 +12077,35 @@ function App() {
           }
           removeChat(chatId);
         }}
+        isExpectedAutoAnswer={
+          contextMenu
+            ? autoAnswerConfig.selectedUserIds.includes(contextMenu.chatId)
+            : false
+        }
+        onToggleAutoAnswerExpected={(targetUserId) => {
+          const isSelected =
+            autoAnswerConfig.selectedUserIds.includes(targetUserId);
+          const nextUserIds = isSelected
+            ? autoAnswerConfig.selectedUserIds.filter(
+                (id) => id !== targetUserId,
+              )
+            : [...autoAnswerConfig.selectedUserIds, targetUserId];
+          const nextCfg: AutoAnswerConfig = {
+            ...autoAnswerConfig,
+            selectedUserIds: nextUserIds,
+          };
+          updateAutoAnswerConfig(nextCfg);
+          const targetName =
+            users.find((u) => u.id === targetUserId)?.displayName ||
+            "Foydalanuvchi";
+          if (!isSelected) {
+            toast.success(`${targetName} avto-javobgichda kutilmoqda! 🤖`);
+          } else {
+            toast(`${targetName} kutish ro'yxatidan olib tashlandi.`, {
+              icon: "ℹ️",
+            });
+          }
+        }}
       />
 
       {/* ── MESSAGE CONTEXT MENU ── */}
@@ -9886,6 +12161,12 @@ function App() {
         incomingCall={incomingCall}
         acceptCall={acceptCall}
         declineCall={declineCall}
+        myZeroTierNetworks={myZeroTierNetworks}
+        onRefreshZeroTier={() => {
+          void syncZeroTierNetworks();
+          void fetchUsers();
+          toast.success("ZeroTier holati yangilandi! 🔄");
+        }}
       />
 
       {/* ── CALL OVERLAY & SCREENSHARE ── */}

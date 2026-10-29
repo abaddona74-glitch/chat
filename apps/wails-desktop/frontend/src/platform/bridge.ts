@@ -379,9 +379,46 @@ export async function FetchPublicIp(): Promise<{ ip?: string; error?: string }> 
   return isWailsRuntime ? WailsApp.FetchPublicIp() : { error: "Unsupported on this platform." };
 }
 
+export async function GetZeroTierNetworks(): Promise<Array<{ id: string; name: string; ip: string; status?: string; type?: string; assignedAddresses?: string[] }>> {
+  if (isWailsRuntime && typeof WailsApp.GetZeroTierNetworks === "function") {
+    try {
+      return await WailsApp.GetZeroTierNetworks();
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
 export async function GetAppliedProxy(): Promise<string> {
   return isWailsRuntime ? WailsApp.GetAppliedProxy() : "";
 }
+
+export async function OpenInstagramWindow(): Promise<boolean> {
+  if (isWailsRuntime && typeof (WailsApp as any).OpenInstagramWindow === "function") {
+    try {
+      await (WailsApp as any).OpenInstagramWindow();
+      return true;
+    } catch (e) {
+      console.warn("Wails OpenInstagramWindow error, falling back:", e);
+    }
+  }
+  if (typeof window !== "undefined") {
+    const win = window.open(
+      "https://www.instagram.com/",
+      "InstagramMobile",
+      "width=410,height=820,menubar=no,toolbar=no,location=no,status=no,resizable=yes"
+    );
+    if (win) {
+      try {
+        win.focus();
+      } catch {}
+    }
+    return true;
+  }
+  return false;
+}
+
 
 export function EventsOn(eventName: string, callback: (...args: any[]) => void) {
   if (isWailsRuntime) {
@@ -408,3 +445,92 @@ export function BrowserOpenURL(url: string): void {
 
   browserOpenFallback(url);
 }
+
+export function OpenMiniBrowser(url: string): void {
+  const win = typeof window !== "undefined" ? (window as any) : null;
+  if (isWailsRuntime && typeof win?.go?.main?.App?.OpenMiniBrowser === "function") {
+    void win.go.main.App.OpenMiniBrowser(url);
+    return;
+  }
+
+  if (isNativeMobileRuntime) {
+    void Browser.open({ url }).catch(() => browserOpenFallback(url));
+    return;
+  }
+
+  const w = window.open(
+    url,
+    "_blank",
+    "width=1080,height=750,menubar=no,toolbar=no,location=yes,status=no,resizable=yes",
+  );
+  if (!w) {
+    browserOpenFallback(url);
+  }
+}
+
+export async function SelectFileForP2P(): Promise<{ filePath: string; fileName: string; fileSize: number } | null> {
+  if (isWailsRuntime && typeof (WailsApp as any).SelectFileForP2P === "function") {
+    try {
+      return await (WailsApp as any).SelectFileForP2P();
+    } catch (e) {
+      console.warn("SelectFileForP2P error:", e);
+    }
+  }
+  return null;
+}
+
+export async function SelectSaveFileForP2P(defaultName: string): Promise<string> {
+  if (isWailsRuntime && typeof (WailsApp as any).SelectSaveFileForP2P === "function") {
+    try {
+      return await (WailsApp as any).SelectSaveFileForP2P(defaultName);
+    } catch (e) {
+      console.warn("SelectSaveFileForP2P error:", e);
+    }
+  }
+  return "";
+}
+
+export async function StartP2PReceiver(transferId: string, savePath: string): Promise<{ port: number; secretToken: string } | null> {
+  if (isWailsRuntime && typeof (WailsApp as any).StartP2PReceiver === "function") {
+    try {
+      return await (WailsApp as any).StartP2PReceiver(transferId, savePath);
+    } catch (e) {
+      console.warn("StartP2PReceiver error:", e);
+    }
+  }
+  return null;
+}
+
+export async function StartP2PSender(transferId: string, filePath: string, targetIp: string, targetPort: number, secretToken: string): Promise<boolean> {
+  if (isWailsRuntime && typeof (WailsApp as any).StartP2PSender === "function") {
+    try {
+      return await (WailsApp as any).StartP2PSender(transferId, filePath, targetIp, targetPort, secretToken);
+    } catch (e) {
+      console.warn("StartP2PSender error:", e);
+    }
+  }
+  return false;
+}
+
+export async function CancelP2PTransfer(transferId: string): Promise<boolean> {
+  if (isWailsRuntime && typeof (WailsApp as any).CancelP2PTransfer === "function") {
+    try {
+      return await (WailsApp as any).CancelP2PTransfer(transferId);
+    } catch (e) {
+      console.warn("CancelP2PTransfer error:", e);
+    }
+  }
+  return false;
+}
+
+export async function OpenFolderAndSelect(filePath: string): Promise<void> {
+  if (isWailsRuntime && typeof (WailsApp as any).OpenFolderAndSelect === "function") {
+    try {
+      await (WailsApp as any).OpenFolderAndSelect(filePath);
+      return;
+    } catch (e) {
+      console.warn("OpenFolderAndSelect error:", e);
+    }
+  }
+}
+

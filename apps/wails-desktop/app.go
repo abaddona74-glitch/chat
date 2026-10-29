@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -13,12 +16,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
 
 	"github.com/energye/systray"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -27,6 +32,9 @@ var (
 	procGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
 	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
 	procSetWindowPos             = user32.NewProc("SetWindowPos")
+	procEnumWindows              = user32.NewProc("EnumWindows")
+	procGetWindowTextW           = user32.NewProc("GetWindowTextW")
+	procIsWindowVisible          = user32.NewProc("IsWindowVisible")
 
 	winmm         = syscall.NewLazyDLL("winmm.dll")
 	procPlaySound = winmm.NewProc("PlaySoundW")
@@ -101,6 +109,7 @@ func (a *App) startup(ctx context.Context) {
 	// Start system tray in background
 	go systray.Run(a.setupTray, nil)
 	go a.applyWindowCaptionTheme()
+	go a.startActivityMonitor()
 	if a.launchMinimizedOnStartup {
 		runtime.WindowHide(ctx)
 	}
@@ -915,3 +924,703 @@ func (a *App) FetchPublicIp() map[string]interface{} {
 func (a *App) GetAppliedProxy() string {
 	return os.Getenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
 }
+
+// ZeroTierNetwork represents a joined ZeroTier network with its assigned IP
+type ZeroTierNetwork struct {
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	IP                string   `json:"ip"`
+	Status            string   `json:"status"`
+	Type              string   `json:"type,omitempty"`
+	AssignedAddresses []string `json:"assignedAddresses,omitempty"`
+}
+
+// GetZeroTierNetworks discovers all connected ZeroTier networks and their assigned IPs
+func (a *App) GetZeroTierNetworks() []ZeroTierNetwork {
+	networks := make([]ZeroTierNetwork, 0)
+
+	// 1. Try zerotier-cli -j listnetworks (best source: includes network name, ID, and IPs)
+	cmd := exec.Command("zerotier-cli", "-j", "listnetworks")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	output, err := cmd.Output()
+	if err == nil && len(output) > 0 {
+		var rawList []struct {
+			ID                string   `json:"id"`
+			Name              string   `json:"name"`
+			Status            string   `json:"status"`
+			Type              string   `json:"type"`
+			AssignedAddresses []string `json:"assignedAddresses"`
+		}
+		if jsonErr := json.Unmarshal(output, &rawList); jsonErr == nil {
+			for _, item := range rawList {
+				ipv4 := ""
+				for _, addr := range item.AssignedAddresses {
+					cleanIP := strings.Split(addr, "/")[0]
+					if strings.Contains(cleanIP, ".") { // IPv4
+						ipv4 = cleanIP
+						break
+					}
+				}
+				name := strings.TrimSpace(item.Name)
+				if name == "" {
+					name = item.ID
+				}
+				networks = append(networks, ZeroTierNetwork{
+					ID:                item.ID,
+					Name:              name,
+					IP:                ipv4,
+					Status:            item.Status,
+					Type:              item.Type,
+					AssignedAddresses: item.AssignedAddresses,
+				})
+			}
+			if len(networks) > 0 {
+				return networks
+			}
+		}
+	}
+
+	// 2. Fallback: inspect system network interfaces for ZeroTier adapters
+	ifaces, err := net.Interfaces()
+	if err == nil {
+		for _, iface := range ifaces {
+			name := iface.Name
+			lower := strings.ToLower(name)
+			if strings.Contains(lower, "zerotier") || strings.HasPrefix(lower, "zt") {
+				netID := ""
+				// Check if interface name contains [networkId]
+				if start := strings.Index(name, "["); start != -1 {
+					if end := strings.Index(name[start:], "]"); end != -1 {
+						netID = name[start+1 : start+end]
+					}
+				}
+				if netID == "" {
+					netID = name
+				}
+
+				addrs, addrErr := iface.Addrs()
+				if addrErr != nil {
+					continue
+				}
+				for _, addr := range addrs {
+					var ip net.IP
+					switch v := addr.(type) {
+					case *net.IPNet:
+						ip = v.IP
+					case *net.IPAddr:
+						ip = v.IP
+					}
+					if ip == nil || ip.IsLoopback() {
+						continue
+					}
+					ip4 := ip.To4()
+					if ip4 != nil {
+						networks = append(networks, ZeroTierNetwork{
+							ID:     netID,
+							Name:   netID,
+							IP:     ip4.String(),
+							Status: "OK",
+						})
+					}
+				}
+			}
+		}
+	}
+
+	return networks
+}
+
+// findAndFocusInstagramWindow looks for an already-open Instagram browser window and brings it to the front.
+func findAndFocusInstagramWindow() bool {
+	var foundHwnd uintptr
+	cb := syscall.NewCallback(func(hwnd uintptr, lParam uintptr) uintptr {
+		vis, _, _ := procIsWindowVisible.Call(hwnd)
+		if vis == 0 {
+			return 1
+		}
+		buf := make([]uint16, 256)
+		textLen, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), 256)
+		if textLen > 0 {
+			title := strings.ToLower(syscall.UTF16ToString(buf))
+			if strings.Contains(title, "instagram") {
+				foundHwnd = hwnd
+				return 0
+			}
+		}
+		return 1
+	})
+	procEnumWindows.Call(cb, 0)
+	if foundHwnd != 0 {
+		showWindow.Call(foundHwnd, SW_RESTORE)
+		setForeground.Call(foundHwnd)
+		return true
+	}
+	return false
+}
+
+// OpenInstagramWindow opens Instagram in a standalone phone-sized app window (410x820)
+// with a dedicated persistent profile so login session is preserved permanently.
+func (a *App) OpenInstagramWindow() error {
+	// If an Instagram window is already open, bring it to front
+	if findAndFocusInstagramWindow() {
+		return nil
+	}
+
+	localDir := os.Getenv("LOCALAPPDATA")
+	if localDir == "" {
+		localDir = os.Getenv("APPDATA")
+	}
+	profileDir := filepath.Join(localDir, "ChatDesktop", "instagram_profile")
+
+	// If old profile exists in Roaming APPDATA and not yet in LOCALAPPDATA, use old one to retain login
+	roamingDir := os.Getenv("APPDATA")
+	if roamingDir != "" && roamingDir != localDir {
+		oldProfile := filepath.Join(roamingDir, "ChatDesktop", "instagram_profile")
+		if _, err := os.Stat(filepath.Join(oldProfile, "Default")); err == nil {
+			if _, err2 := os.Stat(filepath.Join(profileDir, "Default")); err2 != nil {
+				profileDir = oldProfile
+			}
+		}
+	}
+	_ = os.MkdirAll(profileDir, 0755)
+
+	// Clean stale singleton locks that block subsequent launches
+	_ = os.Remove(filepath.Join(profileDir, "SingletonLock"))
+	_ = os.Remove(filepath.Join(profileDir, "SingletonCookie"))
+	_ = os.Remove(filepath.Join(profileDir, "SingletonSocket"))
+
+	candidates := []string{
+		filepath.Join(os.Getenv("ProgramFiles"), "Google", "Chrome", "Application", "chrome.exe"),
+		filepath.Join(os.Getenv("ProgramFiles(x86)"), "Google", "Chrome", "Application", "chrome.exe"),
+		filepath.Join(os.Getenv("LOCALAPPDATA"), "Google", "Chrome", "Application", "chrome.exe"),
+		filepath.Join(os.Getenv("ProgramFiles"), "Microsoft", "Edge", "Application", "msedge.exe"),
+		filepath.Join(os.Getenv("ProgramFiles(x86)"), "Microsoft", "Edge", "Application", "msedge.exe"),
+		filepath.Join(os.Getenv("LOCALAPPDATA"), "Microsoft", "Edge", "Application", "msedge.exe"),
+	}
+
+	// Also check EdgeCore directory if standard Edge path doesn't exist
+	edgeCoreBase := filepath.Join(os.Getenv("ProgramFiles(x86)"), "Microsoft", "EdgeCore")
+	if entries, readErr := os.ReadDir(edgeCoreBase); readErr == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				exe := filepath.Join(edgeCoreBase, e.Name(), "msedge.exe")
+				candidates = append(candidates, exe)
+			}
+		}
+	}
+
+	var browserExe string
+	for _, c := range candidates {
+		if c != "" {
+			if _, statErr := os.Stat(c); statErr == nil {
+				browserExe = c
+				break
+			}
+		}
+	}
+
+	if browserExe == "" {
+		if path, lookErr := exec.LookPath("chrome.exe"); lookErr == nil {
+			browserExe = path
+		} else if path, lookErr := exec.LookPath("msedge.exe"); lookErr == nil {
+			browserExe = path
+		}
+	}
+
+	if browserExe == "" {
+		return fmt.Errorf("Chrome yoki Edge brauzeri topilmadi")
+	}
+
+	args := []string{
+		"--app=https://www.instagram.com/",
+		"--window-size=410,820",
+		"--user-data-dir=" + profileDir,
+		"--profile-directory=Default",
+		"--no-first-run",
+		"--no-default-browser-check",
+		"--disable-background-mode",
+		"--disable-features=Translate",
+		"--enable-features=NetworkService,NetworkServiceInProcess",
+		"--new-window",
+	}
+
+	cmd := exec.Command(browserExe, args...)
+	return cmd.Start()
+}
+
+// ── P2P ZeroTier Direct File Transfer ──
+
+type p2pTransferInfo struct {
+	cancelFunc context.CancelFunc
+	server     *http.Server
+	filePath   string
+}
+
+var (
+	p2pTransfersMu sync.Mutex
+	p2pTransfers   = make(map[string]*p2pTransferInfo)
+)
+
+// SelectFileForP2P opens native open file dialog
+func (a *App) SelectFileForP2P() (map[string]interface{}, error) {
+	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "P2P orqali yuboriladigan faylni tanlang",
+	})
+	if err != nil || path == "" {
+		return nil, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"filePath": path,
+		"fileName": filepath.Base(path),
+		"fileSize": info.Size(),
+	}, nil
+}
+
+// SelectSaveFileForP2P opens native save file dialog
+func (a *App) SelectSaveFileForP2P(defaultName string) (string, error) {
+	return runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		DefaultFilename: defaultName,
+		Title:           "Faylni saqlash joyini tanlang",
+	})
+}
+
+// StartP2PReceiver starts an HTTP listener on a free port to receive file data
+func (a *App) StartP2PReceiver(transferId string, savePath string) (map[string]interface{}, error) {
+	if transferId == "" || savePath == "" {
+		return nil, fmt.Errorf("transferId va savePath kerak")
+	}
+
+	if err := os.MkdirAll(filepath.Dir(savePath), 0755); err != nil {
+		return nil, err
+	}
+
+	tokenBytes := make([]byte, 16)
+	rand.Read(tokenBytes)
+	secretToken := hex.EncodeToString(tokenBytes)
+
+	listener, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		return nil, fmt.Errorf("Port ochib bo'lmadi: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	ctx, cancel := context.WithCancel(context.Background())
+	mux := http.NewServeMux()
+	server := &http.Server{
+		Handler: mux,
+	}
+
+	p2pTransfersMu.Lock()
+	p2pTransfers[transferId] = &p2pTransferInfo{
+		cancelFunc: cancel,
+		server:     server,
+		filePath:   savePath,
+	}
+	p2pTransfersMu.Unlock()
+
+	mux.HandleFunc("/p2p-upload", func(w http.ResponseWriter, r *http.Request) {
+		token := r.URL.Query().Get("token")
+		if token != secretToken {
+			http.Error(w, "Unauthorized", http.StatusForbidden)
+			return
+		}
+
+		out, createErr := os.Create(savePath)
+		if createErr != nil {
+			http.Error(w, createErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer out.Close()
+
+		totalBytes, _ := strconv.ParseInt(r.Header.Get("X-File-Size"), 10, 64)
+		buf := make([]byte, 256*1024)
+		var written int64
+		startTime := time.Now()
+		lastReport := time.Now()
+
+		for {
+			select {
+			case <-ctx.Done():
+				http.Error(w, "Cancelled", http.StatusBadRequest)
+				return
+			default:
+			}
+
+			n, rErr := r.Body.Read(buf)
+			if n > 0 {
+				_, wErr := out.Write(buf[:n])
+				if wErr != nil {
+					http.Error(w, "Fayl yozishda xatolik", http.StatusInternalServerError)
+					return
+				}
+				written += int64(n)
+
+				if time.Since(lastReport) >= 120*time.Millisecond || (totalBytes > 0 && written >= totalBytes) {
+					lastReport = time.Now()
+					elapsed := time.Since(startTime).Seconds()
+					speedMBs := 0.0
+					if elapsed > 0 {
+						speedMBs = (float64(written) / (1024 * 1024)) / elapsed
+					}
+					percent := 0.0
+					if totalBytes > 0 {
+						percent = math.Min(100.0, float64(written)/float64(totalBytes)*100.0)
+					}
+					runtime.EventsEmit(a.ctx, "p2p:progress", map[string]interface{}{
+						"transferId": transferId,
+						"bytes":      written,
+						"total":      totalBytes,
+						"speed":      fmt.Sprintf("%.2f MB/s", speedMBs),
+						"percent":    math.Round(percent*10) / 10,
+						"isReceiver": true,
+					})
+				}
+			}
+			if rErr != nil {
+				if rErr == io.EOF {
+					break
+				}
+				http.Error(w, "Oqim uzildi", http.StatusInternalServerError)
+				return
+			}
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+
+		runtime.EventsEmit(a.ctx, "p2p:completed", map[string]interface{}{
+			"transferId": transferId,
+			"savePath":   savePath,
+			"isReceiver": true,
+		})
+
+		p2pTransfersMu.Lock()
+		delete(p2pTransfers, transferId)
+		p2pTransfersMu.Unlock()
+
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			server.Close()
+		}()
+	})
+
+	go func() {
+		if sErr := server.Serve(listener); sErr != nil && sErr != http.ErrServerClosed {
+			runtime.EventsEmit(a.ctx, "p2p:error", map[string]interface{}{
+				"transferId": transferId,
+				"error":      sErr.Error(),
+				"isReceiver": true,
+			})
+		}
+	}()
+
+	return map[string]interface{}{
+		"port":        port,
+		"secretToken": secretToken,
+	}, nil
+}
+
+// StartP2PSender opens local file and streams bytes to the receiver over ZeroTier IP
+func (a *App) StartP2PSender(transferId string, filePath string, receiverIp string, port int, secretToken string) (bool, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return false, fmt.Errorf("Faylni ochib bo'lmadi: %v", err)
+	}
+
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return false, err
+	}
+	totalBytes := info.Size()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	p2pTransfersMu.Lock()
+	p2pTransfers[transferId] = &p2pTransferInfo{
+		cancelFunc: cancel,
+		filePath:   filePath,
+	}
+	p2pTransfersMu.Unlock()
+
+	go func() {
+		defer file.Close()
+		defer func() {
+			p2pTransfersMu.Lock()
+			delete(p2pTransfers, transferId)
+			p2pTransfersMu.Unlock()
+		}()
+
+		pr := &p2pProgressReader{
+			reader: file,
+			onProgress: func(sent int64, speed float64, percent float64) {
+				runtime.EventsEmit(a.ctx, "p2p:progress", map[string]interface{}{
+					"transferId": transferId,
+					"bytes":      sent,
+					"total":      totalBytes,
+					"speed":      fmt.Sprintf("%.2f MB/s", speed),
+					"percent":    math.Round(percent*10) / 10,
+					"isReceiver": false,
+				})
+			},
+			total:     totalBytes,
+			startTime: time.Now(),
+		}
+
+		targetURL := fmt.Sprintf("http://%s:%d/p2p-upload?token=%s", receiverIp, port, secretToken)
+		req, reqErr := http.NewRequestWithContext(ctx, "POST", targetURL, pr)
+		if reqErr != nil {
+			runtime.EventsEmit(a.ctx, "p2p:error", map[string]interface{}{
+				"transferId": transferId,
+				"error":      reqErr.Error(),
+				"isReceiver": false,
+			})
+			return
+		}
+		req.Header.Set("X-File-Size", strconv.FormatInt(totalBytes, 10))
+		req.Header.Set("Content-Type", "application/octet-stream")
+
+		client := &http.Client{
+			Timeout: 0,
+		}
+		resp, doErr := client.Do(req)
+		if doErr != nil {
+			runtime.EventsEmit(a.ctx, "p2p:error", map[string]interface{}{
+				"transferId": transferId,
+				"error":      doErr.Error(),
+				"isReceiver": false,
+			})
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			runtime.EventsEmit(a.ctx, "p2p:completed", map[string]interface{}{
+				"transferId": transferId,
+				"isReceiver": false,
+			})
+		} else {
+			runtime.EventsEmit(a.ctx, "p2p:error", map[string]interface{}{
+				"transferId": transferId,
+				"error":      fmt.Sprintf("Server kodi: %d", resp.StatusCode),
+				"isReceiver": false,
+			})
+		}
+	}()
+
+	return true, nil
+}
+
+// CancelP2PTransfer cancels an ongoing transfer
+func (a *App) CancelP2PTransfer(transferId string) bool {
+	p2pTransfersMu.Lock()
+	defer p2pTransfersMu.Unlock()
+
+	info, exists := p2pTransfers[transferId]
+	if !exists {
+		return false
+	}
+	if info.cancelFunc != nil {
+		info.cancelFunc()
+	}
+	if info.server != nil {
+		info.server.Close()
+	}
+	delete(p2pTransfers, transferId)
+	return true
+}
+
+// OpenFolderAndSelect opens Windows Explorer and selects the file
+func (a *App) OpenFolderAndSelect(filePath string) error {
+	cleanPath := filepath.Clean(filePath)
+	if _, err := os.Stat(cleanPath); err != nil {
+		dir := filepath.Dir(cleanPath)
+		cmd := exec.Command("explorer.exe", dir)
+		return cmd.Start()
+	}
+	cmd := exec.Command("explorer.exe", "/select,"+cleanPath)
+	return cmd.Start()
+}
+
+type p2pProgressReader struct {
+	reader     io.Reader
+	onProgress func(sent int64, speed float64, percent float64)
+	total      int64
+	sent       int64
+	startTime  time.Time
+	lastReport time.Time
+}
+
+func (pr *p2pProgressReader) Read(p []byte) (int, error) {
+	n, err := pr.reader.Read(p)
+	if n > 0 {
+		pr.sent += int64(n)
+		now := time.Now()
+		if now.Sub(pr.lastReport) >= 120*time.Millisecond || pr.sent >= pr.total {
+			pr.lastReport = now
+			elapsed := now.Sub(pr.startTime).Seconds()
+			speedMBs := 0.0
+			if elapsed > 0 {
+				speedMBs = (float64(pr.sent) / (1024 * 1024)) / elapsed
+			}
+			percent := 0.0
+			if pr.total > 0 {
+				percent = math.Min(100.0, float64(pr.sent)/float64(pr.total)*100.0)
+			}
+			if pr.onProgress != nil {
+				pr.onProgress(pr.sent, speedMBs, percent)
+			}
+		}
+	}
+	return n, err
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+// ── DISCORD-STYLE ACTIVITY / RICH PRESENCE DETECTION ──
+
+type DetectedActivity struct {
+	Name    string `json:"name"`
+	Text    string `json:"text"`
+	Emoji   string `json:"emoji"`
+	Details string `json:"details"`
+}
+
+var knownApps = map[string]DetectedActivity{
+	"dota2.exe":                         {Name: "Dota 2", Text: "Dota 2 o'ynamoqda", Emoji: "🎮", Details: "O'yinda"},
+	"cs2.exe":                           {Name: "Counter-Strike 2", Text: "CS2 o'ynamoqda", Emoji: "🎮", Details: "O'yinda"},
+	"csgo.exe":                          {Name: "CS:GO", Text: "CS:GO o'ynamoqda", Emoji: "🎮", Details: "O'yinda"},
+	"gta5.exe":                          {Name: "GTA V", Text: "GTA V o'ynamoqda", Emoji: "🎮", Details: "O'yinda"},
+	"playgtav.exe":                      {Name: "GTA V", Text: "GTA V o'ynamoqda", Emoji: "🎮", Details: "O'yinda"},
+	"valorant-win64-shipping.exe":       {Name: "Valorant", Text: "Valorant o'ynamoqda", Emoji: "🎮", Details: "O'yinda"},
+	"valorant.exe":                      {Name: "Valorant", Text: "Valorant o'ynamoqda", Emoji: "🎮", Details: "O'yinda"},
+	"leagueclientux.exe":                {Name: "League of Legends", Text: "League of Legends o'ynamoqda", Emoji: "🎮", Details: "O'yinda"},
+	"league of legends.exe":             {Name: "League of Legends", Text: "League of Legends o'ynamoqda", Emoji: "🎮", Details: "O'yinda"},
+	"javaw.exe":                         {Name: "Minecraft", Text: "Minecraft o'ynamoqda", Emoji: "🎮", Details: "O'yinda"},
+	"minecraft.exe":                     {Name: "Minecraft", Text: "Minecraft o'ynamoqda", Emoji: "🎮", Details: "O'yinda"},
+	"robloxplayerbeta.exe":              {Name: "Roblox", Text: "Roblox o'ynamoqda", Emoji: "🎮", Details: "O'yinda"},
+	"fortniteclient-win64-shipping.exe": {Name: "Fortnite", Text: "Fortnite o'ynamoqda", Emoji: "🎮", Details: "O'yinda"},
+	"worldoftanks.exe":                  {Name: "World of Tanks", Text: "WoT o'ynamoqda", Emoji: "🎮", Details: "O'yinda"},
+	"pubg.exe":                          {Name: "PUBG", Text: "PUBG o'ynamoqda", Emoji: "🎮", Details: "O'yinda"},
+	"tslgame.exe":                       {Name: "PUBG", Text: "PUBG o'ynamoqda", Emoji: "🎮", Details: "O'yinda"},
+	"steam.exe":                         {Name: "Steam", Text: "Steam da", Emoji: "🎮", Details: "O'yinda"},
+	"code.exe":                          {Name: "Visual Studio Code", Text: "VS Code da ishlamoqda", Emoji: "💻", Details: "Dasturlash"},
+	"devenv.exe":                        {Name: "Visual Studio", Text: "Visual Studio da ishlamoqda", Emoji: "💻", Details: "Dasturlash"},
+	"pycharm64.exe":                     {Name: "PyCharm", Text: "PyCharm da ishlamoqda", Emoji: "🐍", Details: "Dasturlash"},
+	"idea64.exe":                        {Name: "IntelliJ IDEA", Text: "IntelliJ IDEA da ishlamoqda", Emoji: "💻", Details: "Dasturlash"},
+	"webstorm64.exe":                    {Name: "WebStorm", Text: "WebStorm da ishlamoqda", Emoji: "💻", Details: "Dasturlash"},
+	"photoshop.exe":                     {Name: "Adobe Photoshop", Text: "Photoshop da ishlamoqda", Emoji: "🎨", Details: "Dizayn"},
+	"figma.exe":                         {Name: "Figma", Text: "Figma da dizayn qilmoqda", Emoji: "🎨", Details: "Dizayn"},
+	"blender.exe":                       {Name: "Blender", Text: "Blender da ishlamoqda", Emoji: "🎨", Details: "3D Dizayn"},
+	"spotify.exe":                       {Name: "Spotify", Text: "Spotify da musiqa tinglamoqda", Emoji: "🎧", Details: "Musiqa"},
+}
+
+// DetectRunningActivity scans running processes and matches known games/apps
+func (a *App) DetectRunningActivity() *DetectedActivity {
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil
+	}
+	defer windows.CloseHandle(snapshot)
+
+	var entry windows.ProcessEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+
+	if err := windows.Process32First(snapshot, &entry); err != nil {
+		return nil
+	}
+
+	for {
+		name := windows.UTF16ToString(entry.ExeFile[:])
+		lowerName := strings.ToLower(name)
+		if act, ok := knownApps[lowerName]; ok {
+			result := act
+			return &result
+		}
+		if err := windows.Process32Next(snapshot, &entry); err != nil {
+			break
+		}
+	}
+	return nil
+}
+
+// GetDetectedActivity returns current running game or application
+func (a *App) GetDetectedActivity() *DetectedActivity {
+	return a.DetectRunningActivity()
+}
+
+func (a *App) startActivityMonitor() {
+	ticker := time.NewTicker(12 * time.Second)
+	defer ticker.Stop()
+
+	var lastActivityName string
+
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-ticker.C:
+			act := a.DetectRunningActivity()
+			curName := ""
+			if act != nil {
+				curName = act.Name
+			}
+			if curName != lastActivityName {
+				lastActivityName = curName
+				runtime.EventsEmit(a.ctx, "discord:activity:changed", act)
+			}
+		}
+	}
+}
+
+// OpenMiniBrowser opens a URL in a lightweight dedicated app window (Edge or Chrome app mode)
+func (a *App) OpenMiniBrowser(targetUrl string) error {
+	if targetUrl == "" {
+		return fmt.Errorf("empty url")
+	}
+
+	// Try Microsoft Edge first (--app=<url>)
+	edgePaths := []string{
+		filepath.Join(os.Getenv("ProgramFiles(x86)"), "Microsoft", "Edge", "Application", "msedge.exe"),
+		filepath.Join(os.Getenv("ProgramFiles"), "Microsoft", "Edge", "Application", "msedge.exe"),
+		filepath.Join(os.Getenv("LocalAppData"), "Microsoft", "Edge", "Application", "msedge.exe"),
+	}
+
+	for _, p := range edgePaths {
+		if p != "" && fileExists(p) {
+			cmd := exec.Command(p, fmt.Sprintf("--app=%s", targetUrl), "--window-size=1080,750")
+			if err := cmd.Start(); err == nil {
+				return nil
+			}
+		}
+	}
+
+	// Try Chrome (--app=<url>)
+	chromePaths := []string{
+		filepath.Join(os.Getenv("ProgramFiles"), "Google", "Chrome", "Application", "chrome.exe"),
+		filepath.Join(os.Getenv("ProgramFiles(x86)"), "Google", "Chrome", "Application", "chrome.exe"),
+		filepath.Join(os.Getenv("LocalAppData"), "Google", "Chrome", "Application", "chrome.exe"),
+	}
+
+	for _, p := range chromePaths {
+		if p != "" && fileExists(p) {
+			cmd := exec.Command(p, fmt.Sprintf("--app=%s", targetUrl), "--window-size=1080,750")
+			if err := cmd.Start(); err == nil {
+				return nil
+			}
+		}
+	}
+
+	// Fallback to default browser
+	runtime.BrowserOpenURL(a.ctx, targetUrl)
+	return nil
+}
+
+
+

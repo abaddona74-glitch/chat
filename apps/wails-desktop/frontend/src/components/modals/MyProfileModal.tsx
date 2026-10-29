@@ -144,6 +144,55 @@ export function MyProfileModal({
                 Current: {currentUser.statusEmoji} {currentUser.statusText}
               </small>
             )}
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+              {[
+                { emoji: "🎮", text: "Dota 2 o'ynamoqda" },
+                { emoji: "🎮", text: "CS2 o'ynamoqda" },
+                { emoji: "💻", text: "VS Code da ishlamoqda" },
+                { emoji: "🎧", text: "Musiqa tinglamoqda" },
+                { emoji: "😴", text: "Uxlamoqda" },
+              ].map((preset) => (
+                <button
+                  key={preset.text}
+                  type="button"
+                  onClick={() => {
+                    setEditStatusEmoji(preset.emoji);
+                    setEditStatusText(preset.text);
+                  }}
+                  style={{
+                    fontSize: 11,
+                    padding: "3px 8px",
+                    borderRadius: 12,
+                    background: "rgba(255, 255, 255, 0.08)",
+                    border: "1px solid rgba(255, 255, 255, 0.12)",
+                    color: "var(--text)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {preset.emoji} {preset.text}
+                </button>
+              ))}
+              {(editStatusText || editStatusEmoji) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditStatusEmoji("");
+                    setEditStatusText("");
+                  }}
+                  style={{
+                    fontSize: 11,
+                    padding: "3px 8px",
+                    borderRadius: 12,
+                    background: "rgba(239, 68, 68, 0.15)",
+                    border: "1px solid rgba(239, 68, 68, 0.3)",
+                    color: "#f87171",
+                    cursor: "pointer",
+                  }}
+                >
+                  ✕ Tozalash
+                </button>
+              )}
+            </div>
           </div>
           <div className="my-profile-field">
             <label>Username</label>

@@ -1,10 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { API_URL } from "../../lib/api";
-import { BrowserOpenURL } from "../../platform/bridge";
+import { BrowserOpenURL, OpenMiniBrowser } from "../../platform/bridge";
 import {
   OgMeta,
   ogMetaCache,
-  ogMetaFetching,
+  fetchOgMeta,
   getSiteName,
   getYouTubeVideoId,
   isYouTubeShortsUrl,
@@ -47,27 +46,15 @@ export function LinkPreview({ url }: { url: string }) {
   }, []);
 
   useEffect(() => {
-    if (ogMetaCache.has(url)) {
-      setMeta(ogMetaCache.get(url) ?? null);
+    let active = true;
+    fetchOgMeta(url).then((data) => {
+      if (!active) return;
+      setMeta(data);
       setLoaded(true);
-      return;
-    }
-    if (ogMetaFetching.has(url)) return;
-    ogMetaFetching.add(url);
-
-    fetch(`${API_URL}/og-meta?url=${encodeURIComponent(url)}`)
-      .then((r) => r.json())
-      .then((data: OgMeta) => {
-        ogMetaCache.set(url, data);
-        ogMetaFetching.delete(url);
-        setMeta(data);
-        setLoaded(true);
-      })
-      .catch(() => {
-        ogMetaCache.set(url, null);
-        ogMetaFetching.delete(url);
-        setLoaded(true);
-      });
+    });
+    return () => {
+      active = false;
+    };
   }, [url]);
 
   useEffect(() => {
@@ -115,16 +102,8 @@ export function LinkPreview({ url }: { url: string }) {
     };
   }, [url, isYouTube, ytVideoId, isInstagram, instagramEmbedUrl]);
 
-  if (!loaded) {
-    return (
-      <div className="link-preview loading">
-        <div className="link-preview-spinner" />
-      </div>
-    );
-  }
-
-  if (!meta || (!meta.title && !meta.description && !meta.image)) {
-    return null; // No OG meta, show nothing extra
+  if (!loaded || !meta || (!meta.title && !meta.description && !meta.image)) {
+    return null; // No OG meta or still loading: keep chat clean without empty spinning boxes
   }
 
   const siteName = meta.siteName || getSiteName(url);
@@ -194,7 +173,7 @@ export function LinkPreview({ url }: { url: string }) {
               className="yt-inline-btn"
               onClick={(e) => {
                 e.stopPropagation();
-                BrowserOpenURL(url);
+                OpenMiniBrowser(url);
               }}
               title="Open in browser"
             >
@@ -304,7 +283,7 @@ export function LinkPreview({ url }: { url: string }) {
               className="yt-inline-btn"
               onClick={(e) => {
                 e.stopPropagation();
-                BrowserOpenURL(url);
+                OpenMiniBrowser(url);
               }}
               title="Open in browser"
             >
@@ -326,7 +305,7 @@ export function LinkPreview({ url }: { url: string }) {
         } else if (isInstagram && instagramEmbedUrl) {
           setIgPlaying(true);
         } else {
-          BrowserOpenURL(url);
+          OpenMiniBrowser(url);
         }
       }}
     >

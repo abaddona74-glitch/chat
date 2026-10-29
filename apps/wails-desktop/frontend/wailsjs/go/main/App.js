@@ -165,3 +165,37 @@ export function ShowOSNotification(arg1, arg2) {
 export function ShowWindow() {
   return window['go']['main']['App']['ShowWindow']();
 }
+
+export function GetZeroTierNetworks() {
+  return window['go']['main']['App']['GetZeroTierNetworks']();
+}
+
+export function OpenInstagramWindow() {
+  return window['go']['main']['App']['OpenInstagramWindow']();
+}
+
+export function SelectFileForP2P() {
+  return window['go']['main']['App']['SelectFileForP2P']();
+}
+
+export function SelectSaveFileForP2P(arg1) {
+  return window['go']['main']['App']['SelectSaveFileForP2P'](arg1);
+}
+
+export function StartP2PReceiver(arg1, arg2) {
+  return window['go']['main']['App']['StartP2PReceiver'](arg1, arg2);
+}
+
+export function StartP2PSender(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['StartP2PSender'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function CancelP2PTransfer(arg1) {
+  return window['go']['main']['App']['CancelP2PTransfer'](arg1);
+}
+
+export function OpenFolderAndSelect(arg1) {
+  return window['go']['main']['App']['OpenFolderAndSelect'](arg1);
+}
+
+
